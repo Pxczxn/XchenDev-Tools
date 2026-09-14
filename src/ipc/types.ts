@@ -71,6 +71,14 @@ export interface ProjectScanResult {
   candidates: TechnologyCandidate[];
 }
 
+export interface ProjectInfo {
+  project_id: string;
+  name: string;
+  root_path: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface LaunchProfile {
   profile_id: string;
   project_id: string;
