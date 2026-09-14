@@ -1,5 +1,4 @@
-pub mod project_catalog;
-
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -8,7 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::domain::{AppSettings, AuditEvent, LaunchProfile, RecentError};
+use crate::domain::{AppSettings, AuditEvent, LaunchProfile, ProjectInfo, RecentError};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -17,6 +16,8 @@ pub struct AppConfig {
     pub settings: AppSettings,
     #[serde(default)]
     pub manual_overrides: HashMap<String, String>,
+    #[serde(default)]
+    pub projects: Vec<ProjectInfo>,
     #[serde(default)]
     pub launch_profiles: Vec<LaunchProfile>,
     #[serde(default)]
@@ -31,6 +32,7 @@ impl Default for AppConfig {
             version: 1,
             settings: AppSettings::default(),
             manual_overrides: HashMap::new(),
+            projects: vec![],
             launch_profiles: vec![],
             audit_events: vec![],
             recent_errors: vec![],
@@ -107,6 +109,75 @@ impl ConfigStore {
             kind.hash(&mut hasher);
         }
         hasher.finish()
+    }
+
+    pub fn list_projects(&self) -> Vec<ProjectInfo> {
+        let mut projects = self
+            .config
+            .lock()
+            .map(|cfg| cfg.projects.clone())
+            .unwrap_or_default();
+        projects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        projects
+    }
+
+    pub fn upsert_project(&self, root_path: &str, name: Option<&str>) -> Result<ProjectInfo, String> {
+        let root = PathBuf::from(root_path);
+        if !root.is_dir() {
+            return Err("PROJECT_ROOT_INVALID:项目目录不存在".to_string());
+        }
+        let canonical = fs::canonicalize(&root)
+            .map_err(|e| format!("PROJECT_ROOT_INVALID:{}", e))?;
+        let normalized = canonical.to_string_lossy().to_string();
+        let project_id = project_id_from_path(&normalized);
+        let now = Utc::now().to_rfc3339();
+        let display_name = name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                canonical
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| normalized.clone())
+            });
+
+        let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+        let project = if let Some(existing) = cfg
+            .projects
+            .iter_mut()
+            .find(|project| project.project_id == project_id)
+        {
+            existing.name = display_name;
+            existing.root_path = normalized;
+            existing.updated_at = now;
+            existing.clone()
+        } else {
+            let project = ProjectInfo {
+                project_id,
+                name: display_name,
+                root_path: normalized,
+                created_at: now.clone(),
+                updated_at: now,
+            };
+            cfg.projects.push(project.clone());
+            project
+        };
+        persist(&self.path, &cfg)?;
+        Ok(project)
+    }
+
+    pub fn remove_project(&self, project_id: &str) -> Result<bool, String> {
+        let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+        let before = cfg.projects.len();
+        cfg.projects
+            .retain(|project| project.project_id != project_id);
+        let removed = cfg.projects.len() != before;
+        if removed {
+            persist(&self.path, &cfg)?;
+        }
+        Ok(removed)
     }
 
     pub fn upsert_launch_profile(&self, profile: LaunchProfile) -> Result<(), String> {
