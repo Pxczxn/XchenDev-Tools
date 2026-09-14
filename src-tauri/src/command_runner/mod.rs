@@ -481,6 +481,19 @@ fn publish_terminal_session(
         .unwrap()
         .remove(profile_id);
 
+    #[cfg(windows)]
+    let _job_released = {
+        let mut guard = runner.inner.sessions.lock().unwrap();
+        if let Some(session) = guard.get_mut(session_id) {
+            session.info.state = final_state;
+            session.info.exit_code = exit_code;
+            session.job.take()
+        } else {
+            None
+        }
+    };
+
+    #[cfg(not(windows))]
     {
         let mut guard = runner.inner.sessions.lock().unwrap();
         if let Some(session) = guard.get_mut(session_id) {
@@ -1018,6 +1031,69 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
         }
         None
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn natural_root_exit_closes_job_and_kills_remaining_descendants() {
+        if !node_on_path() {
+            eprintln!(
+                "SKIP natural_root_exit_closes_job_and_kills_remaining_descendants: node not on PATH"
+            );
+            return;
+        }
+        let runner = CommandRunnerState::new();
+        let unrelated = runner
+            .start_for_test("profile-natural-unrelated", ".", "ping -n 120 127.0.0.1")
+            .expect("unrelated ping");
+        let unrelated_pid = unrelated.pid.expect("pid");
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Avoid `[]` in the script — `cmd /C` misparses them. Node exits; ping stays in the Job.
+        let spawn_and_exit = "node -e \"require('child_process').spawn('ping -n 120 127.0.0.1',{shell:true,stdio:'ignore'});setTimeout(function(){process.exit(0)},800)\"";
+        let info = runner
+            .start_for_test("profile-natural-job-close", ".", spawn_and_exit)
+            .expect("start");
+        let session_id = info.launch_session_id.clone();
+        let root_pid = info.pid.expect("pid");
+
+        let observe_deadline = Instant::now() + Duration::from_secs(15);
+        let mut lingering_ping = None;
+        while Instant::now() < observe_deadline {
+            if let Some(ping_pid) = wait_for_descendant(root_pid, "ping", Duration::from_millis(100))
+            {
+                lingering_ping = Some(ping_pid);
+                break;
+            }
+            if let Some(session) = runner.get(&session_id) {
+                if matches!(
+                    session.state,
+                    LaunchSessionState::Stopped | LaunchSessionState::Failed
+                ) {
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let lingering_ping =
+            lingering_ping.expect("spawned ping should appear under session root before root exits");
+
+        let terminal = wait_until_terminal(&runner, &session_id, Duration::from_secs(15));
+        assert_eq!(terminal.state, LaunchSessionState::Stopped);
+
+        let session_after = runner.get(&session_id).expect("terminal session still queryable");
+        assert_eq!(session_after.state, LaunchSessionState::Stopped);
+        assert_eq!(session_after.launch_session_id, session_id);
+
+        assert_pid_exits(lingering_ping, Duration::from_secs(5));
+        assert!(
+            is_pid_alive(unrelated_pid),
+            "unrelated session ping must survive other session job close"
+        );
+
+        runner.stop(&unrelated.launch_session_id).expect("cleanup");
+        assert_pid_exits(unrelated_pid, Duration::from_secs(5));
+        wait_until_terminal(&runner, &unrelated.launch_session_id, Duration::from_secs(5));
     }
 
     #[test]
