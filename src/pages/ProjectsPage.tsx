@@ -1,10 +1,11 @@
-import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { PageHeader } from "../components/PageHeader";
 import {
   issueLaunchConfirmation,
   listLaunchProfiles,
+  listLaunchSessions,
   projectIdForPath,
   saveLaunchProfile,
   scanProjectDirectory,
@@ -19,6 +20,27 @@ import type {
 import { formatDisplayPath } from "../lib/formatDisplay";
 import { labelErrorText, labelStatus } from "../lib/statusLabels";
 
+const ACTIVE_SESSION_STATES = new Set(["STARTING", "RUNNING", "STOPPING"]);
+
+type SessionsById = Record<string, LaunchSessionInfo>;
+type LogsBySessionId = Record<string, string[]>;
+
+function indexSessions(sessions: LaunchSessionInfo[]): SessionsById {
+  return Object.fromEntries(
+    sessions.map((session) => [session.launch_session_id, session]),
+  );
+}
+
+function activeSessionForProfile(
+  sessionsById: SessionsById,
+  profileId: string,
+): LaunchSessionInfo | undefined {
+  return Object.values(sessionsById).find(
+    (session) =>
+      session.profile_id === profileId && ACTIVE_SESSION_STATES.has(session.state),
+  );
+}
+
 export function ProjectsPage() {
   const [rootPath, setRootPath] = useState("");
   const [projectId, setProjectId] = useState("");
@@ -28,12 +50,22 @@ export function ProjectsPage() {
   const [role, setRole] = useState("frontend");
   const [command, setCommand] = useState("");
   const [workdir, setWorkdir] = useState("");
-  const [session, setSession] = useState<LaunchSessionInfo | null>(null);
-  const [logs, setLogs] = useState<string[]>([]);
+  const [sessionsById, setSessionsById] = useState<SessionsById>({});
+  const [logsBySessionId, setLogsBySessionId] = useState<LogsBySessionId>({});
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    let disposed = false;
+
+    void listLaunchSessions()
+      .then((sessions) => {
+        if (!disposed) setSessionsById(indexSessions(sessions));
+      })
+      .catch((e) => {
+        if (!disposed) setMessage(labelErrorText(String(e)));
+      });
+
     const unlisten = listen<{
       launchSessionId: string;
       stream: string;
@@ -42,26 +74,46 @@ export function ProjectsPage() {
       exitCode?: number;
     }>("launch_output", (event) => {
       const p = event.payload;
-      if (session && p.launchSessionId !== session.launch_session_id) return;
-      if (p.final) {
-        setLogs((prev) => [
+      const line = p.final
+        ? `[${labelStatus("exit")}] 退出码=${p.exitCode ?? "?"}`
+        : `[${labelStatus(p.stream)}] ${p.chunk}`;
+
+      setLogsBySessionId((prev) => ({
+        ...prev,
+        [p.launchSessionId]: [...(prev[p.launchSessionId] ?? []), line],
+      }));
+
+      if (!p.final) return;
+
+      // finalState is currently hard-coded by the backend. Mark terminal locally first,
+      // then refresh from the authoritative runtime session list.
+      setSessionsById((prev) => {
+        const current = prev[p.launchSessionId];
+        if (!current) return prev;
+        return {
           ...prev,
-          `[${labelStatus("exit")}] 退出码=${p.exitCode ?? "?"}`,
-        ]);
-        setSession((s) =>
-          s ? { ...s, state: "STOPPED", exit_code: p.exitCode ?? undefined } : s,
-        );
-      } else {
-        setLogs((prev) => [
-          ...prev,
-          `[${labelStatus(p.stream)}] ${p.chunk}`,
-        ]);
-      }
+          [p.launchSessionId]: {
+            ...current,
+            state: "STOPPED",
+            exit_code: p.exitCode ?? current.exit_code,
+          },
+        };
+      });
+
+      void listLaunchSessions()
+        .then((sessions) => {
+          if (!disposed) setSessionsById(indexSessions(sessions));
+        })
+        .catch(() => {
+          // Keep the event-derived terminal state if the refresh fails.
+        });
     });
+
     return () => {
-      unlisten.then((fn) => fn());
+      disposed = true;
+      void unlisten.then((fn) => fn());
     };
-  }, [session]);
+  }, []);
 
   async function pickDir() {
     const selected = await open({ directory: true, multiple: false });
@@ -115,27 +167,39 @@ export function ProjectsPage() {
   async function onStart(profile: LaunchProfile) {
     try {
       const confirm = await issueLaunchConfirmation(profile.profile_id);
-      const ok = window.confirm(
-        `确认启动？\n${confirm.binding_summary}`,
-      );
+      const ok = window.confirm(`确认启动？\n${confirm.binding_summary}`);
       if (!ok) return;
-      setLogs([]);
+
       const info = await startLaunchProfile(
         profile.profile_id,
         confirm.confirmation_token,
       );
-      setSession(info);
+      setSessionsById((prev) => ({
+        ...prev,
+        [info.launch_session_id]: info,
+      }));
+      setLogsBySessionId((prev) => ({
+        ...prev,
+        [info.launch_session_id]: [],
+      }));
       setMessage(`会话已启动 PID ${info.pid ?? "?"}`);
     } catch (e) {
       setMessage(labelErrorText(String(e)));
     }
   }
 
-  async function onStop() {
-    if (!session) return;
+  async function onStop(session: LaunchSessionInfo) {
     try {
       await stopLaunchSession(session.launch_session_id);
-      setMessage("已请求停止");
+      setSessionsById((prev) => {
+        const current = prev[session.launch_session_id];
+        if (!current || !ACTIVE_SESSION_STATES.has(current.state)) return prev;
+        return {
+          ...prev,
+          [session.launch_session_id]: { ...current, state: "STOPPING" },
+        };
+      });
+      setMessage(`已请求停止 PID ${session.pid ?? "?"}`);
     } catch (e) {
       setMessage(labelErrorText(String(e)));
     }
@@ -173,7 +237,11 @@ export function ProjectsPage() {
             <div key={c.id} className="env-candidate">
               <div className="env-candidate-head">
                 <span className="env-tag">{labelStatus(c.stack)}</span>
-                <span className={c.status === "CONFLICT" ? "env-badge err" : "env-badge ok"}>
+                <span
+                  className={
+                    c.status === "CONFLICT" ? "env-badge err" : "env-badge ok"
+                  }
+                >
                   {labelStatus(c.status)}
                 </span>
               </div>
@@ -205,29 +273,29 @@ export function ProjectsPage() {
             <h3>启动配置</h3>
           </div>
           <div className="card-body">
-          <div className="form-row">
-            <select value={role} onChange={(e) => setRole(e.target.value)}>
-              <option value="frontend">前端</option>
-              <option value="backend">后端</option>
-            </select>
-            <input
-              className="input-grow"
-              value={workdir}
-              onChange={(e) => setWorkdir(e.target.value)}
-              placeholder="工作目录"
-            />
-          </div>
-          <div className="form-row">
-            <input
-              className="input-grow"
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder="启动命令"
-            />
-            <button type="button" onClick={onSaveProfile}>
-              保存启动配置
-            </button>
-          </div>
+            <div className="form-row">
+              <select value={role} onChange={(e) => setRole(e.target.value)}>
+                <option value="frontend">前端</option>
+                <option value="backend">后端</option>
+              </select>
+              <input
+                className="input-grow"
+                value={workdir}
+                onChange={(e) => setWorkdir(e.target.value)}
+                placeholder="工作目录"
+              />
+            </div>
+            <div className="form-row">
+              <input
+                className="input-grow"
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder="启动命令"
+              />
+              <button type="button" onClick={onSaveProfile}>
+                保存启动配置
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -237,39 +305,58 @@ export function ProjectsPage() {
             <h3>已保存配置</h3>
           </div>
           <div className="card-body env-candidate-list">
-            {profiles.map((p) => (
-              <div key={p.profile_id} className="env-candidate">
-                <div className="env-candidate-head">
-                  <span className="env-badge muted">{labelStatus(p.process_role)}</span>
+            {profiles.map((profile) => {
+              const activeSession = activeSessionForProfile(
+                sessionsById,
+                profile.profile_id,
+              );
+              const sessionLogs = activeSession
+                ? logsBySessionId[activeSession.launch_session_id] ?? []
+                : [];
+
+              return (
+                <div key={profile.profile_id} className="env-candidate">
+                  <div className="env-candidate-head">
+                    <span className="env-badge muted">
+                      {labelStatus(profile.process_role)}
+                    </span>
+                    {activeSession && (
+                      <span className="env-badge ok">
+                        {labelStatus(activeSession.state)} · PID {activeSession.pid ?? "—"}
+                      </span>
+                    )}
+                  </div>
+                  <div className="env-path">{profile.command}</div>
+                  <div className="env-meta">
+                    <span className="env-meta-label">目录</span>
+                    <span className="env-version">
+                      {formatDisplayPath(profile.working_directory)}
+                    </span>
+                  </div>
+                  <div className="list-card-actions">
+                    {activeSession ? (
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => onStop(activeSession)}
+                        disabled={activeSession.state === "STOPPING"}
+                      >
+                        {activeSession.state === "STOPPING" ? "停止中…" : "停止"}
+                      </button>
+                    ) : (
+                      <button type="button" onClick={() => onStart(profile)}>
+                        启动
+                      </button>
+                    )}
+                  </div>
+                  {activeSession && (
+                    <div className="log-panel">
+                      {sessionLogs.join("\n") || "暂无输出"}
+                    </div>
+                  )}
                 </div>
-                <div className="env-path">{p.command}</div>
-                <div className="env-meta">
-                  <span className="env-meta-label">目录</span>
-                  <span className="env-version">{formatDisplayPath(p.working_directory)}</span>
-                </div>
-                <div className="list-card-actions">
-                  <button type="button" onClick={() => onStart(p)}>启动</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      {session && (
-        <div className="card">
-          <div className="card-header">
-            <h3>运行会话</h3>
-            <span className="card-meta">
-              {labelStatus(session.state)} · PID {session.pid ?? "—"}
-            </span>
-          </div>
-          <div className="card-body">
-            <div className="form-row env-manual-form">
-              <button type="button" className="secondary btn-sm" onClick={onStop}>
-                停止
-              </button>
-            </div>
-            <div className="log-panel">{logs.join("\n") || "暂无输出"}</div>
+              );
+            })}
           </div>
         </div>
       )}
