@@ -3,6 +3,7 @@
 
 use std::ffi::c_void;
 use std::mem::size_of;
+use std::process::Command as OsCommand;
 use std::thread;
 use std::time::Duration;
 
@@ -19,8 +20,45 @@ use windows::Win32::System::Threading::{
 };
 
 fn main() {
-    println!("=== F003 Windows Job Object Spike ===\n");
+    println!("=== F003 Windows Job Object Spike ===");
+    println!("host={}", std::env::var("COMPUTERNAME").unwrap_or_default());
+    println!("java_on_path={}", java_on_path());
+    println!();
 
+    for job_flags in [JobFlags::KillOnCloseOnly, JobFlags::KillOnCloseWithBreakaway] {
+        println!("################################################################");
+        println!("# Job flags: {}", job_flags.label());
+        println!("################################################################\n");
+        run_suite(job_flags);
+        println!();
+    }
+}
+
+#[derive(Clone, Copy)]
+enum JobFlags {
+    KillOnCloseOnly,
+    KillOnCloseWithBreakaway,
+}
+
+impl JobFlags {
+    fn label(self) -> &'static str {
+        match self {
+            JobFlags::KillOnCloseOnly => "KILL_ON_JOB_CLOSE only",
+            JobFlags::KillOnCloseWithBreakaway => "KILL_ON_JOB_CLOSE | BREAKAWAY_OK",
+        }
+    }
+
+    fn limit_flags(self) -> windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT {
+        match self {
+            JobFlags::KillOnCloseOnly => JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JobFlags::KillOnCloseWithBreakaway => {
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            }
+        }
+    }
+}
+
+fn run_suite(job_flags: JobFlags) {
     let scenarios = [
         ("spawn_then_assign", SpawnMode::SpawnThenAssign),
         ("create_suspended_assign_resume", SpawnMode::CreateSuspendedAssignResume),
@@ -37,41 +75,69 @@ fn main() {
     for (mode_name, mode) in scenarios {
         println!("--- Mode: {} ---", mode_name);
         for (label, cmdline) in commands {
-            match run_scenario(mode, cmdline) {
+            match run_scenario(job_flags, mode, cmdline) {
                 Ok(report) => print_report(label, &report),
-                Err(e) => println!("[{}] SKIP/ERR: {}\n", label, e),
+                Err(e) => println!("[{}] ERR: {}", label, e),
             }
         }
         println!();
     }
 
-    println!("--- Long-running npm script via cmd ---");
-    if let Ok(r) = run_scenario(
+    println!("--- Long-running npm chain (CREATE_SUSPENDED) ---");
+    match run_scenario(
+        job_flags,
         SpawnMode::CreateSuspendedAssignResume,
         "cmd /C npm exec --yes -- node -e \"setInterval(()=>{}, 1e6)\"",
     ) {
-        print_report("npm_exec_node", &r);
-    } else {
-        println!("npm_exec_node: skipped");
+        Ok(r) => print_report("npm_exec_node", &r),
+        Err(e) => println!("[npm_exec_node] ERR: {}", e),
     }
 
-    if let Ok(r) = java_scenario() {
-        println!(
-            "--- cmd_java (CREATE_SUSPENDED) descendants_in_job={}/{} terminate_ok={} ---",
-            r.descendants_in_job.iter().filter(|b| **b).count(),
-            r.descendants_in_job.len(),
-            r.terminate_job_killed_all
-        );
+    println!();
+    if java_on_path() {
+        let long_cmd = match java_long_cmd() {
+            Ok(cmd) => cmd,
+            Err(e) => {
+                println!("--- Java compile failed: {} ---", e);
+                String::new()
+            }
+        };
+        println!("--- Java: cmd /C java -version (short) ---");
+        match run_scenario(
+            job_flags,
+            SpawnMode::CreateSuspendedAssignResume,
+            "cmd /C java -version",
+        ) {
+            Ok(r) => print_report("cmd_java_version", &r),
+            Err(e) => println!("[cmd_java_version] ERR: {}", e),
+        }
+        println!();
+        if long_cmd.is_empty() {
+            println!("--- Java: long-running SpikeSleep SKIPPED ---");
+        } else {
+            println!("--- Java: long-running SpikeSleep (CREATE_SUSPENDED) ---");
+            match run_scenario_with_settle(
+                job_flags,
+                SpawnMode::CreateSuspendedAssignResume,
+                &long_cmd,
+                3000,
+            ) {
+                Ok(r) => print_report("cmd_java_sleep", &r),
+                Err(e) => println!("[cmd_java_sleep] ERR: {}", e),
+            }
+        }
     } else {
-        println!("--- cmd_java: skipped (java not on PATH or spawn failed) ---");
+        println!("--- Java: NOT ON PATH — long-running coverage UNVERIFIED ---");
     }
 
-    println!("\n--- Isolation: unrelated ping survives job terminate ---");
-    if let Ok(r) = isolation_test() {
-        println!(
-            "unrelated_ping_survived={} job_children_killed={}",
+    println!();
+    println!("--- Isolation: unrelated ping survives job close ---");
+    match isolation_test(job_flags) {
+        Ok(r) => println!(
+            "unrelated_ping_survived={} job_root_killed={}",
             r.unrelated_survived, r.job_killed
-        );
+        ),
+        Err(e) => println!("isolation ERR: {}", e),
     }
 }
 
@@ -85,9 +151,11 @@ enum SpawnMode {
 struct ScenarioReport {
     root_pid: u32,
     assign_ok: bool,
+    assign_err: Option<String>,
     root_in_job: bool,
     descendant_pids: Vec<u32>,
     descendants_in_job: Vec<bool>,
+    escaped_before_assign: bool,
     terminate_job_killed_all: bool,
 }
 
@@ -100,13 +168,15 @@ fn print_report(label: &str, r: &ScenarioReport) {
     let in_job = r.descendants_in_job.iter().filter(|b| **b).count();
     let total = r.descendants_in_job.len();
     println!(
-        "[{}] root_pid={} assign_ok={} root_in_job={} descendants={}/{} in_job terminate_ok={}",
+        "[{}] root_pid={} assign_ok={} assign_err={} root_in_job={} descendants={}/{} in_job escaped_before_assign={} terminate_ok={}",
         label,
         r.root_pid,
         r.assign_ok,
+        r.assign_err.as_deref().unwrap_or("-"),
         r.root_in_job,
         in_job,
         total,
+        r.escaped_before_assign,
         r.terminate_job_killed_all
     );
     if !r.descendant_pids.is_empty() {
@@ -118,13 +188,40 @@ fn print_report(label: &str, r: &ScenarioReport) {
     }
 }
 
-fn run_scenario(mode: SpawnMode, cmdline: &str) -> Result<ScenarioReport, String> {
-    let job = create_session_job()?;
+fn run_scenario(
+    job_flags: JobFlags,
+    mode: SpawnMode,
+    cmdline: &str,
+) -> Result<ScenarioReport, String> {
+    run_scenario_with_settle(job_flags, mode, cmdline, 800)
+}
+
+fn run_scenario_with_settle(
+    job_flags: JobFlags,
+    mode: SpawnMode,
+    cmdline: &str,
+    settle_ms: u64,
+) -> Result<ScenarioReport, String> {
+    let job = create_session_job(job_flags)?;
     let (root_pid, root_handle, thread_handle) = spawn_cmd(mode, cmdline)?;
+
+    let pre_assign_descendants = if matches!(mode, SpawnMode::SpawnDelayAssign(_)) {
+        Vec::new()
+    } else if matches!(mode, SpawnMode::SpawnThenAssign) {
+        thread::sleep(Duration::from_micros(100));
+        collect_descendants(root_pid)
+    } else {
+        Vec::new()
+    };
+
     if let SpawnMode::SpawnDelayAssign(ms) = mode {
         thread::sleep(Duration::from_millis(ms));
     }
-    let assign_ok = assign_to_job(job, root_handle).is_ok();
+
+    let assign_result = assign_to_job(job, root_handle);
+    let assign_ok = assign_result.is_ok();
+    let assign_err = assign_result.err();
+
     if let Some(th) = thread_handle {
         unsafe {
             let _ = ResumeThread(th);
@@ -135,7 +232,7 @@ fn run_scenario(mode: SpawnMode, cmdline: &str) -> Result<ScenarioReport, String
         let _ = CloseHandle(root_handle);
     }
 
-    thread::sleep(Duration::from_millis(800));
+    thread::sleep(Duration::from_millis(settle_ms));
 
     let root_in_job = is_pid_in_job(root_pid, job);
     let descendant_pids = collect_descendants(root_pid);
@@ -144,31 +241,34 @@ fn run_scenario(mode: SpawnMode, cmdline: &str) -> Result<ScenarioReport, String
         .map(|pid| is_pid_in_job(*pid, job))
         .collect::<Vec<_>>();
 
+    let escaped_before_assign = matches!(mode, SpawnMode::SpawnDelayAssign(_))
+        && descendants_in_job.iter().any(|b| !*b)
+        && !descendant_pids.is_empty();
+
+    let pre_assign_escape = !pre_assign_descendants.is_empty()
+        && pre_assign_descendants
+            .iter()
+            .any(|pid| !is_pid_in_job(*pid, job));
+
     let terminate_job_killed_all = terminate_job_and_verify(job, root_pid, &descendant_pids);
 
     Ok(ScenarioReport {
         root_pid,
         assign_ok,
+        assign_err,
         root_in_job,
         descendant_pids,
         descendants_in_job,
+        escaped_before_assign: escaped_before_assign || pre_assign_escape,
         terminate_job_killed_all,
     })
 }
 
-fn java_scenario() -> Result<ScenarioReport, String> {
-    run_scenario(
-        SpawnMode::CreateSuspendedAssignResume,
-        r"cmd /C java -version",
-    )
-}
-
-fn create_session_job() -> Result<HANDLE, String> {
+fn create_session_job(job_flags: JobFlags) -> Result<HANDLE, String> {
     let job = unsafe { CreateJobObjectW(None, None) }
         .map_err(|e| format!("CreateJobObjectW: {}", e))?;
     let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    info.BasicLimitInformation.LimitFlags =
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+    info.BasicLimitInformation.LimitFlags = job_flags.limit_flags();
     unsafe {
         SetInformationJobObject(
             job,
@@ -289,8 +389,44 @@ fn is_pid_alive(pid: u32) -> bool {
     system.process(Pid::from_u32(pid)).is_some()
 }
 
-fn isolation_test() -> Result<IsolationReport, String> {
-    let job = create_session_job()?;
+fn java_on_path() -> bool {
+    OsCommand::new("where")
+        .arg("java")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn write_java_sleep_source() -> Result<std::path::PathBuf, String> {
+    use std::io::Write;
+    let path = std::env::temp_dir().join("SpikeSleep.java");
+    let mut f = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+    write!(
+        f,
+        "public class SpikeSleep {{ public static void main(String[] a) throws Exception {{ Thread.sleep(120000); }} }}\n"
+    )
+    .map_err(|e| e.to_string())?;
+    let status = OsCommand::new("javac")
+        .arg(&path)
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err("javac SpikeSleep.java failed".to_string());
+    }
+    Ok(path)
+}
+
+fn java_long_cmd() -> Result<String, String> {
+    write_java_sleep_source()?;
+    let temp = std::env::temp_dir();
+    Ok(format!(
+        "cmd /C java -cp \"{}\" SpikeSleep",
+        temp.display()
+    ))
+}
+
+fn isolation_test(job_flags: JobFlags) -> Result<IsolationReport, String> {
+    let job = create_session_job(job_flags)?;
     let (root_pid, root_handle, thread_handle) =
         spawn_cmd(SpawnMode::CreateSuspendedAssignResume, r"cmd /C ping -n 60 127.0.0.1")?;
     assign_to_job(job, root_handle)?;

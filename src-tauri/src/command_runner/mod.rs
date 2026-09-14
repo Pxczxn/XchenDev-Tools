@@ -1,16 +1,20 @@
-//! Launch command sessions. After F001, `wait_for_child` waits outside `sessions` lock.
-//! F002: `stop()` kills via `session.child` when present; otherwise `taskkill /PID` only after
-//! verifying pid + start time match the direct child recorded at spawn (no `/T` — F003).
-//! Follow-up: `launch_output.finalState` is always `"STOPPED"` even when the session is `Failed`.
+//! Launch command sessions. After F001, wait runs outside `sessions` lock.
+//! F002: identity-verified `taskkill /PID` fallback when Job terminate is unavailable.
+//! F003: Windows Job Object owns the session process tree; stop uses `TerminateJobObject` first.
 
 use crate::domain::{LaunchSessionInfo, LaunchSessionState};
 use crate::process_manager::process_start_time_secs;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
-use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
+
+#[cfg(windows)]
+mod windows_job;
+
+#[cfg(not(windows))]
+use std::process::{Child, Command, Stdio};
 
 /// Direct child identity for PID fallback (not exposed on `LaunchSessionInfo`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +51,15 @@ fn verify_pid_identity(expected: &DirectChildIdentity) -> PidIdentityVerdict {
     }
 }
 
+#[cfg(windows)]
+struct LaunchSession {
+    info: LaunchSessionInfo,
+    job: Option<windows_job::SessionJob>,
+    process: Option<windows_job::OwnedProcess>,
+    direct_child: DirectChildIdentity,
+}
+
+#[cfg(not(windows))]
 struct LaunchSession {
     info: LaunchSessionInfo,
     child: Option<Child>,
@@ -90,58 +103,10 @@ impl CommandRunnerState {
             return Err("LAUNCH_ALREADY_RUNNING:该配置已有运行会话".to_string());
         }
 
-        let session_id = Uuid::new_v4().to_string();
-        let mut child = Command::new("cmd")
-            .args(["/C", command])
-            .current_dir(working_directory)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("LAUNCH_START_FAILED:{}", e))?;
+        let (info, stdout, stderr) =
+            register_session(self, profile_id, working_directory, command, true, true)?;
 
-        let pid = child.id();
-        let direct_child = DirectChildIdentity::capture(pid)?;
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        let info = LaunchSessionInfo {
-            launch_session_id: session_id.clone(),
-            profile_id: profile_id.to_string(),
-            pid: Some(pid),
-            state: LaunchSessionState::Running,
-            exit_code: None,
-        };
-
-        self.inner.sessions.lock().map_err(|_| "lock")?.insert(
-            session_id.clone(),
-            LaunchSession {
-                info: info.clone(),
-                child: Some(child),
-                direct_child,
-            },
-        );
-        self.inner
-            .profile_running
-            .lock()
-            .map_err(|_| "lock")?
-            .insert(profile_id.to_string(), session_id.clone());
-
-        if let Some(out) = stdout {
-            let app = app.clone();
-            let sid = session_id.clone();
-            std::thread::spawn(move || stream_lines(&app, &sid, "stdout", out));
-        }
-        if let Some(err) = stderr {
-            let app = app.clone();
-            let sid = session_id.clone();
-            std::thread::spawn(move || stream_lines(&app, &sid, "stderr", err));
-        }
-
-        let runner = self.clone();
-        let app = app.clone();
-        let sid = session_id.clone();
-        let profile_id_owned = profile_id.to_string();
-        std::thread::spawn(move || wait_for_child(app, runner, sid, profile_id_owned));
+        spawn_io_and_wait(app, self, &info, stdout, stderr, profile_id);
 
         Ok(info)
     }
@@ -182,11 +147,162 @@ impl CommandRunnerState {
     }
 }
 
+fn register_session(
+    runner: &CommandRunnerState,
+    profile_id: &str,
+    working_directory: &str,
+    command: &str,
+    pipe_stdout: bool,
+    pipe_stderr: bool,
+) -> Result<(LaunchSessionInfo, Option<std::fs::File>, Option<std::fs::File>), String> {
+    let session_id = Uuid::new_v4().to_string();
+
+    #[cfg(windows)]
+    {
+        let spawned = windows_job::spawn_cmd_session(
+            working_directory,
+            command,
+            pipe_stdout,
+            pipe_stderr,
+        )?;
+        let direct_child = DirectChildIdentity::capture(spawned.pid)?;
+        let pid = spawned.pid;
+        let stdout = spawned.stdout;
+        let stderr = spawned.stderr;
+
+        let info = LaunchSessionInfo {
+            launch_session_id: session_id.clone(),
+            profile_id: profile_id.to_string(),
+            pid: Some(pid),
+            state: LaunchSessionState::Running,
+            exit_code: None,
+        };
+
+        runner.inner.sessions.lock().map_err(|_| "lock")?.insert(
+            session_id.clone(),
+            LaunchSession {
+                info: info.clone(),
+                job: Some(spawned.job),
+                process: Some(spawned.process),
+                direct_child,
+            },
+        );
+        runner
+            .inner
+            .profile_running
+            .lock()
+            .map_err(|_| "lock")?
+            .insert(profile_id.to_string(), session_id);
+
+        return Ok((info, stdout, stderr));
+    }
+
+    #[cfg(not(windows))]
+    {
+        let mut child = Command::new("cmd")
+            .args(["/C", command])
+            .current_dir(working_directory)
+            .stdout(if pipe_stdout {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stderr(if pipe_stderr {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .spawn()
+            .map_err(|e| format!("LAUNCH_START_FAILED:{}", e))?;
+
+        let pid = child.id();
+        let direct_child = DirectChildIdentity::capture(pid)?;
+        let stdout = if pipe_stdout {
+            child.stdout.take()
+        } else {
+            None
+        };
+        let stderr = if pipe_stderr {
+            child.stderr.take()
+        } else {
+            None
+        };
+
+        let info = LaunchSessionInfo {
+            launch_session_id: session_id.clone(),
+            profile_id: profile_id.to_string(),
+            pid: Some(pid),
+            state: LaunchSessionState::Running,
+            exit_code: None,
+        };
+
+        runner.inner.sessions.lock().map_err(|_| "lock")?.insert(
+            session_id.clone(),
+            LaunchSession {
+                info: info.clone(),
+                child: Some(child),
+                direct_child,
+            },
+        );
+        runner
+            .inner
+            .profile_running
+            .lock()
+            .map_err(|_| "lock")?
+            .insert(profile_id.to_string(), session_id);
+
+        Ok((info, stdout, stderr))
+    }
+}
+
+fn spawn_io_and_wait(
+    app: &AppHandle,
+    runner: &CommandRunnerState,
+    info: &LaunchSessionInfo,
+    stdout: Option<impl Read + Send + 'static>,
+    stderr: Option<impl Read + Send + 'static>,
+    profile_id: &str,
+) {
+    let session_id = info.launch_session_id.clone();
+    if let Some(out) = stdout {
+        let app = app.clone();
+        let sid = session_id.clone();
+        std::thread::spawn(move || stream_lines(&app, &sid, "stdout", out));
+    }
+    if let Some(err) = stderr {
+        let app = app.clone();
+        let sid = session_id.clone();
+        std::thread::spawn(move || stream_lines(&app, &sid, "stderr", err));
+    }
+
+    let runner = runner.clone();
+    let app = app.clone();
+    let sid = session_id.clone();
+    let profile_id_owned = profile_id.to_string();
+    std::thread::spawn(move || wait_for_child(app, runner, sid, profile_id_owned));
+}
+
 fn attempt_stop_terminate(
     runner: &CommandRunnerState,
     session_id: &str,
     direct_child: DirectChildIdentity,
 ) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        if !test_skip_job_terminate() {
+            let job_result = {
+                let mut sessions = runner.inner.sessions.lock().map_err(|_| "lock")?;
+                sessions
+                    .get_mut(session_id)
+                    .and_then(|session| session.job.as_ref().map(|job| job.terminate()))
+            };
+            if job_result == Some(Ok(())) {
+                return Ok(());
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
     {
         let mut sessions = runner.inner.sessions.lock().map_err(|_| "lock")?;
         if let Some(session) = sessions.get_mut(session_id) {
@@ -195,6 +311,28 @@ fn attempt_stop_terminate(
                     return Ok(());
                 }
             }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let terminate_via_handle = {
+            let mut sessions = runner.inner.sessions.lock().map_err(|_| "lock")?;
+            if let Some(session) = sessions.get_mut(session_id) {
+                if let Some(process) = session.process.as_ref() {
+                    unsafe {
+                        use windows::Win32::System::Threading::TerminateProcess;
+                        TerminateProcess(process.raw(), 1).is_ok()
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if terminate_via_handle {
+            return Ok(());
         }
     }
 
@@ -207,7 +345,6 @@ fn attempt_stop_terminate(
             if terminate_direct_child(direct_child.pid) {
                 Ok(())
             } else {
-                // Concurrent stop or fast exit: process may disappear after verify but before taskkill.
                 match verify_pid_identity(&direct_child) {
                     PidIdentityVerdict::Gone => Ok(()),
                     _ => Err("LAUNCH_STOP_FAILED:无法向子进程发起终止".to_string()),
@@ -221,7 +358,20 @@ fn attempt_stop_terminate(
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(test)]
+static TEST_SKIP_JOB_TERMINATE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
 static TEST_FORCE_TASKKILL_FAIL: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+fn test_skip_job_terminate() -> bool {
+    TEST_SKIP_JOB_TERMINATE.load(Ordering::SeqCst)
+}
+
+#[cfg(not(test))]
+fn test_skip_job_terminate() -> bool {
+    false
+}
 
 #[cfg(test)]
 fn test_force_taskkill_fail() -> bool {
@@ -238,6 +388,7 @@ fn terminate_direct_child(pid: u32) -> bool {
     if test_force_taskkill_fail() {
         return false;
     }
+    use std::process::{Command, Stdio};
     let pid_arg = pid.to_string();
     Command::new("taskkill")
         .args(["/PID", &pid_arg, "/F"])
@@ -273,25 +424,49 @@ fn stream_lines<R: Read>(app: &AppHandle, session_id: &str, stream: &str, pipe: 
     }
 }
 
-fn wait_on_child(runner: &CommandRunnerState, session_id: &str) -> (Option<i32>, LaunchSessionState) {
-    let child = {
-        let mut guard = runner.inner.sessions.lock().unwrap();
-        guard
-            .get_mut(session_id)
-            .and_then(|session| session.child.take())
-    };
+fn wait_on_process(
+    runner: &CommandRunnerState,
+    session_id: &str,
+) -> (Option<i32>, LaunchSessionState) {
+    #[cfg(windows)]
+    {
+        let process = {
+            let mut guard = runner.inner.sessions.lock().unwrap();
+            guard
+                .get_mut(session_id)
+                .and_then(|session| session.process.take())
+        };
+        match process {
+            Some(process) => {
+                let (code, failed) = process.wait();
+                if failed {
+                    (code, LaunchSessionState::Failed)
+                } else {
+                    (code, LaunchSessionState::Stopped)
+                }
+            }
+            None => (None, LaunchSessionState::Stopped),
+        }
+    }
 
-    match child {
-        Some(mut child) => match child.wait() {
-            Ok(status) => (status.code(), LaunchSessionState::Stopped),
-            Err(_) => (None, LaunchSessionState::Failed),
-        },
-        None => (None, LaunchSessionState::Stopped),
+    #[cfg(not(windows))]
+    {
+        let child = {
+            let mut guard = runner.inner.sessions.lock().unwrap();
+            guard
+                .get_mut(session_id)
+                .and_then(|session| session.child.take())
+        };
+        match child {
+            Some(mut child) => match child.wait() {
+                Ok(status) => (status.code(), LaunchSessionState::Stopped),
+                Err(_) => (None, LaunchSessionState::Failed),
+            },
+            None => (None, LaunchSessionState::Stopped),
+        }
     }
 }
 
-/// Clears `profile_running` before publishing `Stopped` / `Failed` so a terminal `get()` never
-/// races with `LAUNCH_ALREADY_RUNNING` on immediate restart.
 fn publish_terminal_session(
     runner: &CommandRunnerState,
     session_id: &str,
@@ -317,12 +492,12 @@ fn publish_terminal_session(
     exit_code
 }
 
-fn finalize_child_exit(
+fn finalize_process_exit(
     runner: &CommandRunnerState,
     session_id: &str,
     profile_id: &str,
 ) -> Option<i32> {
-    let (exit_code, final_state) = wait_on_child(runner, session_id);
+    let (exit_code, final_state) = wait_on_process(runner, session_id);
     publish_terminal_session(runner, session_id, profile_id, exit_code, final_state)
 }
 
@@ -332,7 +507,7 @@ fn wait_for_child(
     session_id: String,
     profile_id: String,
 ) {
-    let exit_code = finalize_child_exit(&runner, &session_id, &profile_id);
+    let exit_code = finalize_process_exit(&runner, &session_id, &profile_id);
 
     let _ = app.emit(
         "launch_output",
@@ -349,15 +524,29 @@ fn wait_for_child(
 
 #[cfg(test)]
 impl CommandRunnerState {
-    fn test_take_child(&self, session_id: &str) {
-        self.inner
-            .sessions
-            .lock()
-            .unwrap()
-            .get_mut(session_id)
-            .expect("session")
-            .child
-            .take();
+    fn test_take_process(&self, session_id: &str) {
+        #[cfg(windows)]
+        {
+            self.inner
+                .sessions
+                .lock()
+                .unwrap()
+                .get_mut(session_id)
+                .expect("session")
+                .process
+                .take();
+        }
+        #[cfg(not(windows))]
+        {
+            self.inner
+                .sessions
+                .lock()
+                .unwrap()
+                .get_mut(session_id)
+                .expect("session")
+                .child
+                .take();
+        }
     }
 
     fn test_set_direct_child_start_time(&self, session_id: &str, wrong_start_time_secs: u64) {
@@ -371,7 +560,6 @@ impl CommandRunnerState {
             .start_time_secs = wrong_start_time_secs;
     }
 
-    /// Spawns a session and reaper thread without stdout/stderr IPC (tests only).
     fn start_for_test(
         &self,
         profile_id: &str,
@@ -388,45 +576,29 @@ impl CommandRunnerState {
             return Err("LAUNCH_ALREADY_RUNNING:该配置已有运行会话".to_string());
         }
 
-        let session_id = Uuid::new_v4().to_string();
-        let child = Command::new("cmd")
-            .args(["/C", command])
-            .current_dir(working_directory)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("LAUNCH_START_FAILED:{}", e))?;
-
-        let pid = child.id();
-        let direct_child = DirectChildIdentity::capture(pid)?;
-        let info = LaunchSessionInfo {
-            launch_session_id: session_id.clone(),
-            profile_id: profile_id.to_string(),
-            pid: Some(pid),
-            state: LaunchSessionState::Running,
-            exit_code: None,
-        };
-
-        self.inner.sessions.lock().map_err(|_| "lock")?.insert(
-            session_id.clone(),
-            LaunchSession {
-                info: info.clone(),
-                child: Some(child),
-                direct_child,
-            },
-        );
-        self.inner
-            .profile_running
-            .lock()
-            .map_err(|_| "lock")?
-            .insert(profile_id.to_string(), session_id.clone());
+        let (info, _, _) =
+            register_session(self, profile_id, working_directory, command, false, false)?;
 
         let runner = self.clone();
-        let sid = session_id.clone();
+        let sid = info.launch_session_id.clone();
         let profile_id_owned = profile_id.to_string();
         std::thread::spawn(move || wait_for_child_no_emit(runner, sid, profile_id_owned));
 
         Ok(info)
+    }
+
+    #[cfg(windows)]
+    fn test_session_job_handle(&self, session_id: &str) -> windows::Win32::Foundation::HANDLE {
+        self.inner
+            .sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .expect("session")
+            .job
+            .as_ref()
+            .expect("job")
+            .raw()
     }
 }
 
@@ -436,7 +608,7 @@ fn wait_for_child_no_emit(
     session_id: String,
     profile_id: String,
 ) {
-    finalize_child_exit(&runner, &session_id, &profile_id);
+    finalize_process_exit(&runner, &session_id, &profile_id);
 }
 
 #[cfg(test)]
@@ -463,7 +635,10 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        panic!("session {:?} did not reach terminal state within {:?}", session_id, timeout);
+        panic!(
+            "session {:?} did not reach terminal state within {:?}",
+            session_id, timeout
+        );
     }
 
     fn assert_query_responsive<F>(query: F)
@@ -693,11 +868,13 @@ mod tests {
             .expect("start");
         let pid = info.pid.expect("pid");
         std::thread::sleep(Duration::from_millis(200));
+        TEST_SKIP_JOB_TERMINATE.store(true, Ordering::SeqCst);
         runner.test_set_direct_child_start_time(&info.launch_session_id, 1);
-        runner.test_take_child(&info.launch_session_id);
+        runner.test_take_process(&info.launch_session_id);
         let err = runner
             .stop(&info.launch_session_id)
             .expect_err("mismatch must not terminate");
+        TEST_SKIP_JOB_TERMINATE.store(false, Ordering::SeqCst);
         assert!(
             err.contains("LAUNCH_PROCESS_IDENTITY_MISMATCH"),
             "unexpected error: {err}"
@@ -706,11 +883,13 @@ mod tests {
             is_pid_alive(pid),
             "direct child should remain alive after identity mismatch"
         );
+        TEST_SKIP_JOB_TERMINATE.store(true, Ordering::SeqCst);
         runner.stop(&info.launch_session_id).expect_err("still mismatched");
         runner.test_set_direct_child_start_time(
             &info.launch_session_id,
             process_start_time_secs(pid).expect("live pid"),
         );
+        TEST_SKIP_JOB_TERMINATE.store(false, Ordering::SeqCst);
         runner.stop(&info.launch_session_id).expect("valid identity stop");
         assert_pid_exits(pid, Duration::from_secs(3));
         wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
@@ -723,10 +902,12 @@ mod tests {
             .start_for_test("profile-exit-fallback", ".", "exit 0")
             .expect("start");
         std::thread::sleep(Duration::from_millis(150));
-        runner.test_take_child(&info.launch_session_id);
+        TEST_SKIP_JOB_TERMINATE.store(true, Ordering::SeqCst);
+        runner.test_take_process(&info.launch_session_id);
         runner
             .stop(&info.launch_session_id)
             .expect("stop should succeed when pid is already gone");
+        TEST_SKIP_JOB_TERMINATE.store(false, Ordering::SeqCst);
         wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
     }
 
@@ -737,7 +918,8 @@ mod tests {
             .start_for_test("profile-stopping-fail", ".", "ping -n 30 127.0.0.1")
             .expect("start");
         std::thread::sleep(Duration::from_millis(200));
-        runner.test_take_child(&info.launch_session_id);
+        TEST_SKIP_JOB_TERMINATE.store(true, Ordering::SeqCst);
+        runner.test_take_process(&info.launch_session_id);
         {
             let mut sessions = runner.inner.sessions.lock().unwrap();
             let session = sessions.get_mut(&info.launch_session_id).expect("session");
@@ -748,6 +930,7 @@ mod tests {
             .stop(&info.launch_session_id)
             .expect_err("live process with failed terminate must error");
         TEST_FORCE_TASKKILL_FAIL.store(false, Ordering::SeqCst);
+        TEST_SKIP_JOB_TERMINATE.store(false, Ordering::SeqCst);
         assert!(
             err.contains("LAUNCH_STOP_FAILED"),
             "unexpected error: {err}"
@@ -761,5 +944,247 @@ mod tests {
             .expect("stop should succeed once taskkill works again");
         assert_pid_exits(info.pid.expect("pid"), Duration::from_secs(3));
         wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
+    }
+
+    #[cfg(windows)]
+    fn node_on_path() -> bool {
+        std::process::Command::new("cmd")
+            .args(["/C", "where node >nul 2>&1"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(windows)]
+    fn npm_on_path() -> bool {
+        std::process::Command::new("cmd")
+            .args(["/C", "where npm >nul 2>&1"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(windows)]
+    fn collect_process_tree_pids(root_pid: u32) -> Vec<u32> {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().without_exe(),
+        );
+        let mut pids = vec![root_pid];
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (pid, process) in system.processes() {
+                let pid_u32 = pid.as_u32();
+                if pids.contains(&pid_u32) {
+                    continue;
+                }
+                if pids.contains(&process.parent().map(|p| p.as_u32()).unwrap_or(0)) {
+                    pids.push(pid_u32);
+                    changed = true;
+                }
+            }
+        }
+        pids
+    }
+
+    #[cfg(windows)]
+    fn wait_for_descendant(
+        root_pid: u32,
+        name_contains: &str,
+        timeout: Duration,
+    ) -> Option<u32> {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            let mut system = System::new();
+            system.refresh_processes_specifics(
+                ProcessesToUpdate::All,
+                true,
+                ProcessRefreshKind::nothing().without_exe(),
+            );
+            let tree = collect_process_tree_pids(root_pid);
+            for pid in tree {
+                if let Some(process) = system.process(Pid::from_u32(pid)) {
+                    let name = process.name().to_string_lossy().to_lowercase();
+                    if name.contains(name_contains) {
+                        return Some(pid);
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        None
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn stop_session_kills_node_child() {
+        if !node_on_path() {
+            eprintln!("SKIP stop_session_kills_node_child: node not on PATH");
+            return;
+        }
+        let runner = CommandRunnerState::new();
+        let info = runner
+            .start_for_test(
+                "profile-node-stop",
+                ".",
+                "node -e \"setInterval(()=>{}, 1e6)\"",
+            )
+            .expect("start");
+        let root_pid = info.pid.expect("pid");
+        let node_pid = wait_for_descendant(root_pid, "node", Duration::from_secs(10))
+            .expect("node descendant should appear");
+        std::thread::sleep(Duration::from_millis(300));
+        runner.stop(&info.launch_session_id).expect("stop");
+        assert_pid_exits(node_pid, Duration::from_secs(5));
+        assert_pid_exits(root_pid, Duration::from_secs(5));
+        wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn stop_session_kills_npm_node_chain() {
+        if !npm_on_path() || !node_on_path() {
+            eprintln!("SKIP stop_session_kills_npm_node_chain: npm/node not on PATH");
+            return;
+        }
+        let runner = CommandRunnerState::new();
+        let info = runner
+            .start_for_test(
+                "profile-npm-stop",
+                ".",
+                "npm exec --yes -- node -e \"setInterval(()=>{}, 1e6)\"",
+            )
+            .expect("start");
+        let root_pid = info.pid.expect("pid");
+        let node_pid = wait_for_descendant(root_pid, "node", Duration::from_secs(20))
+            .expect("npm→node chain should produce node descendant");
+        std::thread::sleep(Duration::from_millis(500));
+        runner.stop(&info.launch_session_id).expect("stop");
+        assert_pid_exits(node_pid, Duration::from_secs(8));
+        assert_pid_exits(root_pid, Duration::from_secs(8));
+        wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(8));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn job_all_observed_descendants_in_job() {
+        if !node_on_path() {
+            eprintln!("SKIP job_all_observed_descendants_in_job: node not on PATH");
+            return;
+        }
+        let runner = CommandRunnerState::new();
+        let info = runner
+            .start_for_test(
+                "profile-job-membership",
+                ".",
+                "node -e \"setInterval(()=>{}, 1e6)\"",
+            )
+            .expect("start");
+        let root_pid = info.pid.expect("pid");
+        let _node_pid = wait_for_descendant(root_pid, "node", Duration::from_secs(10))
+            .expect("node descendant");
+        std::thread::sleep(Duration::from_millis(300));
+        let job = runner.test_session_job_handle(&info.launch_session_id);
+        let tree = collect_process_tree_pids(root_pid);
+        for pid in tree {
+            assert!(
+                windows_job::is_pid_in_job(pid, job),
+                "pid {} should belong to session job",
+                pid
+            );
+        }
+        runner.stop(&info.launch_session_id).expect("stop");
+        wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn unrelated_process_survives_session_stop() {
+        let runner = CommandRunnerState::new();
+        let unrelated = runner
+            .start_for_test("profile-unrelated-ping", ".", "ping -n 30 127.0.0.1")
+            .expect("unrelated ping");
+        let unrelated_pid = unrelated.pid.expect("pid");
+        std::thread::sleep(Duration::from_millis(200));
+
+        let session = runner
+            .start_for_test("profile-session-stop", ".", "ping -n 30 127.0.0.1")
+            .expect("session ping");
+        let session_pid = session.pid.expect("pid");
+        std::thread::sleep(Duration::from_millis(200));
+
+        runner.stop(&session.launch_session_id).expect("stop session");
+        assert_pid_exits(session_pid, Duration::from_secs(5));
+        assert!(
+            is_pid_alive(unrelated_pid),
+            "unrelated ping must survive session stop"
+        );
+        runner.stop(&unrelated.launch_session_id).expect("cleanup");
+        assert_pid_exits(unrelated_pid, Duration::from_secs(5));
+        wait_until_terminal(&runner, &session.launch_session_id, Duration::from_secs(5));
+        wait_until_terminal(&runner, &unrelated.launch_session_id, Duration::from_secs(5));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn port_released_after_stop() {
+        if !node_on_path() {
+            eprintln!("SKIP port_released_after_stop: node not on PATH");
+            return;
+        }
+        use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo};
+        use std::net::TcpListener;
+
+        fn port_is_listening(port: u16) -> bool {
+            let sockets = get_sockets_info(
+                AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6,
+                ProtocolFlags::TCP,
+            )
+            .unwrap_or_default();
+            sockets.iter().any(|sock| {
+                matches!(
+                    &sock.protocol_socket_info,
+                    ProtocolSocketInfo::Tcp(t) if t.local_port == port
+                )
+            })
+        }
+
+        let port = 37655u16;
+        let runner = CommandRunnerState::new();
+        let command = format!(
+            "node -e \"require('http').createServer((q,s)=>s.end('ok')).listen({port},'127.0.0.1')\""
+        );
+        let info = runner
+            .start_for_test("profile-port-release", ".", &command)
+            .expect("start");
+        let root_pid = info.pid.expect("pid");
+        let _node_pid = wait_for_descendant(root_pid, "node", Duration::from_secs(10))
+            .expect("node server");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if port_is_listening(port) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(port_is_listening(port), "port should be bound before stop");
+
+        runner.stop(&info.launch_session_id).expect("stop");
+        wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(8));
+
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            if !port_is_listening(port) && TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("port {} not released after stop", port);
     }
 }
