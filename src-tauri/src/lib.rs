@@ -38,6 +38,7 @@ pub fn run() {
             issue_launch_confirmation,
             issue_launch_confirmation_safe,
             start_launch_profile,
+            start_launch_profile_safe,
             stop_launch_session,
             project_id_for_path,
             list_projects,
