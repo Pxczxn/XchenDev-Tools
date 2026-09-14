@@ -198,7 +198,7 @@ export async function saveLaunchProfile(args: {
   command: string;
   sourceCandidateId?: string;
 }): Promise<string> {
-  return invoke("save_launch_profile", {
+  return invoke("save_launch_profile_safe", {
     projectId: args.projectId,
     processRole: args.processRole,
     workingDirectory: args.workingDirectory,
