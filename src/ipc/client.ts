@@ -216,7 +216,7 @@ export async function listLaunchProfiles(
 export async function issueLaunchConfirmation(
   profileId: string,
 ): Promise<LaunchConfirmation> {
-  return invoke("issue_launch_confirmation", { profileId });
+  return invoke("issue_launch_confirmation_safe", { profileId });
 }
 
 export async function startLaunchProfile(
