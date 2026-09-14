@@ -6,15 +6,18 @@ import {
   issueLaunchConfirmation,
   listLaunchProfiles,
   listLaunchSessions,
-  projectIdForPath,
+  listProjects,
+  removeProject,
   saveLaunchProfile,
   scanProjectDirectory,
   startLaunchProfile,
   stopLaunchSession,
+  upsertProject,
 } from "../ipc/client";
 import type {
   LaunchProfile,
   LaunchSessionInfo,
+  ProjectInfo,
   TechnologyCandidate,
 } from "../ipc/types";
 import { formatDisplayPath } from "../lib/formatDisplay";
@@ -42,6 +45,7 @@ function activeSessionForProfile(
 }
 
 export function ProjectsPage() {
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [rootPath, setRootPath] = useState("");
   const [projectId, setProjectId] = useState("");
   const [candidates, setCandidates] = useState<TechnologyCandidate[]>([]);
@@ -55,12 +59,18 @@ export function ProjectsPage() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  async function refreshProjects() {
+    setProjects(await listProjects());
+  }
+
   useEffect(() => {
     let disposed = false;
 
-    void listLaunchSessions()
-      .then((sessions) => {
-        if (!disposed) setSessionsById(indexSessions(sessions));
+    void Promise.all([listProjects(), listLaunchSessions()])
+      .then(([savedProjects, sessions]) => {
+        if (disposed) return;
+        setProjects(savedProjects);
+        setSessionsById(indexSessions(sessions));
       })
       .catch((e) => {
         if (!disposed) setMessage(labelErrorText(String(e)));
@@ -85,8 +95,6 @@ export function ProjectsPage() {
 
       if (!p.final) return;
 
-      // finalState is currently hard-coded by the backend. Mark terminal locally first,
-      // then refresh from the authoritative runtime session list.
       setSessionsById((prev) => {
         const current = prev[p.launchSessionId];
         if (!current) return prev;
@@ -116,11 +124,43 @@ export function ProjectsPage() {
   }, []);
 
   async function pickDir() {
-    const selected = await open({ directory: true, multiple: false });
-    if (typeof selected === "string") {
-      setRootPath(selected);
-      const id = await projectIdForPath(selected);
-      setProjectId(id);
+    const picked = await open({ directory: true, multiple: false });
+    if (typeof picked === "string") {
+      setRootPath(picked);
+      setProjectId("");
+      setProfiles([]);
+      setCandidates([]);
+      setSelected(null);
+      setMessage("目录已选择，扫描后会保存到项目列表");
+    }
+  }
+
+  async function openProject(project: ProjectInfo) {
+    setRootPath(project.root_path);
+    setProjectId(project.project_id);
+    setCandidates([]);
+    setSelected(null);
+    setProfiles(await listLaunchProfiles(project.project_id));
+    setMessage(`已打开项目：${project.name}`);
+  }
+
+  async function onRemoveProject(project: ProjectInfo) {
+    if (!window.confirm(`仅移除项目记录，不删除磁盘文件。\n\n${project.name}`)) {
+      return;
+    }
+    try {
+      await removeProject(project.project_id);
+      if (projectId === project.project_id) {
+        setRootPath("");
+        setProjectId("");
+        setCandidates([]);
+        setProfiles([]);
+        setSelected(null);
+      }
+      await refreshProjects();
+      setMessage("项目记录已移除，磁盘文件未删除");
+    } catch (e) {
+      setMessage(labelErrorText(String(e)));
     }
   }
 
@@ -130,10 +170,13 @@ export function ProjectsPage() {
     setMessage(null);
     try {
       const result = await scanProjectDirectory(rootPath);
+      const project = await upsertProject(result.root_path);
+      setRootPath(project.root_path);
+      setProjectId(project.project_id);
       setCandidates(result.candidates);
-      const id = await projectIdForPath(result.root_path);
-      setProjectId(id);
-      setProfiles(await listLaunchProfiles(id));
+      setProfiles(await listLaunchProfiles(project.project_id));
+      await refreshProjects();
+      setMessage(`项目已保存：${project.name}`);
     } catch (e) {
       setMessage(labelErrorText(String(e)));
     } finally {
@@ -209,28 +252,71 @@ export function ProjectsPage() {
     <>
       <PageHeader
         title="项目管理"
-        description="扫描技术栈、配置并启动前后端会话"
+        description="保存项目、扫描技术栈、配置并启动前后端会话"
       />
+
+      {projects.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <h3>我的项目</h3>
+            <span className="card-meta">{projects.length} 个</span>
+          </div>
+          <div className="card-body env-candidate-list">
+            {projects.map((project) => (
+              <div key={project.project_id} className="env-candidate">
+                <div className="env-candidate-head">
+                  <span className="env-tag">{project.name}</span>
+                  {projectId === project.project_id && (
+                    <span className="env-badge ok">当前项目</span>
+                  )}
+                </div>
+                <div className="env-path" title={project.root_path}>
+                  {formatDisplayPath(project.root_path)}
+                </div>
+                <div className="list-card-actions">
+                  <button type="button" onClick={() => void openProject(project)}>
+                    打开
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => void onRemoveProject(project)}
+                  >
+                    移除记录
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="card toolbar-card env-toolbar">
         <input
           className="env-path-input"
           value={rootPath}
-          onChange={(e) => setRootPath(e.target.value)}
+          onChange={(e) => {
+            setRootPath(e.target.value);
+            setProjectId("");
+          }}
           placeholder="项目根目录"
         />
         <button type="button" className="secondary" onClick={pickDir}>
           选择项目目录
         </button>
         <button type="button" onClick={onScan} disabled={loading || !rootPath}>
-          {loading ? "扫描中…" : "扫描项目"}
+          {loading ? "扫描中…" : projectId ? "重新扫描" : "扫描并添加"}
         </button>
       </div>
+
       {message && <div className="feedback-banner">{message}</div>}
-      {candidates.length === 0 && !loading && (
+
+      {candidates.length === 0 && !loading && rootPath && (
         <div className="card">
-          <div className="empty">选择目录后扫描技术栈证据。</div>
+          <div className="empty">扫描项目以识别技术栈和启动配置。</div>
         </div>
       )}
+
       {candidates.length > 0 && (
         <div className="env-candidate-list">
           {candidates.map((c) => (
@@ -267,6 +353,7 @@ export function ProjectsPage() {
           ))}
         </div>
       )}
+
       {selected && (
         <div className="card">
           <div className="card-header">
@@ -299,6 +386,7 @@ export function ProjectsPage() {
           </div>
         </div>
       )}
+
       {profiles.length > 0 && (
         <div className="card">
           <div className="card-header">
