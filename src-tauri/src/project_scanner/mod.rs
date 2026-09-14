@@ -1,9 +1,9 @@
 use crate::domain::{
     CandidateStatus, ProjectScanResult, TechnologyCandidate, TechnologyStack,
 };
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
 
 const EVIDENCE_FILES: &[(&str, TechnologyStack)] = &[
     ("package.json", TechnologyStack::Node),
@@ -13,6 +13,8 @@ const EVIDENCE_FILES: &[(&str, TechnologyStack)] = &[
     ("pyproject.toml", TechnologyStack::Python),
     ("composer.json", TechnologyStack::Php),
 ];
+
+const NODE_SCRIPT_PRIORITY: &[&str] = &["dev", "start", "serve", "develop", "watch"];
 
 pub fn scan_project_directory(root_path: &str) -> Result<ProjectScanResult, String> {
     let root = Path::new(root_path);
@@ -44,7 +46,7 @@ pub fn scan_project_directory(root_path: &str) -> Result<ProjectScanResult, Stri
 fn scan_dir(
     dir: &Path,
     root: &Path,
-    level: u8,
+    _level: u8,
     out: &mut Vec<TechnologyCandidate>,
 ) -> Result<(), String> {
     for (file_name, stack) in EVIDENCE_FILES {
@@ -60,39 +62,57 @@ fn scan_dir(
 
 fn build_candidate(
     dir: &Path,
-    _root: &Path,
+    root: &Path,
     evidence: &PathBuf,
     stack: TechnologyStack,
     file_name: &str,
 ) -> Result<TechnologyCandidate, String> {
-    let id = Uuid::new_v4().to_string();
     let directory = dir.to_string_lossy().to_string();
     let evidence_file = evidence.to_string_lossy().to_string();
+    let id = stable_candidate_id(root, dir, file_name, stack);
 
     match stack {
         TechnologyStack::Node => {
             let content = fs::read_to_string(evidence).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
             let scripts = parse_npm_scripts(&content);
-            let suggested = scripts.first().cloned();
-            let conflict = scripts.len() > 1;
-            let dir_label = directory.clone();
+            let preferred = preferred_node_scripts(&scripts);
+            let (status, suggested_command, conflict_group) = if preferred.len() == 1 {
+                (
+                    CandidateStatus::Ready,
+                    Some(format!("npm run {}", preferred[0])),
+                    None,
+                )
+            } else if preferred.len() > 1 {
+                (
+                    CandidateStatus::NeedsConfirmation,
+                    Some(format!("npm run {}", preferred[0])),
+                    Some(format!("node-scripts-{}", directory)),
+                )
+            } else if scripts.len() == 1 {
+                (
+                    CandidateStatus::Ready,
+                    Some(format!("npm run {}", scripts[0])),
+                    None,
+                )
+            } else if scripts.len() > 1 {
+                (
+                    CandidateStatus::Conflict,
+                    None,
+                    Some(format!("node-scripts-{}", directory)),
+                )
+            } else {
+                (CandidateStatus::EvidenceOnly, None, None)
+            };
+
             Ok(TechnologyCandidate {
                 id,
                 directory,
                 evidence_file,
                 stack,
-                status: if conflict {
-                    CandidateStatus::Conflict
-                } else {
-                    CandidateStatus::Ready
-                },
-                suggested_command: suggested.map(|s| format!("npm run {}", s)),
+                status,
+                suggested_command,
                 scripts: Some(scripts),
-                conflict_group: if conflict {
-                    Some(format!("node-scripts-{}", dir_label))
-                } else {
-                    None
-                },
+                conflict_group,
             })
         }
         TechnologyStack::Maven => {
@@ -154,16 +174,37 @@ fn build_candidate(
     }
 }
 
+fn stable_candidate_id(root: &Path, dir: &Path, file_name: &str, stack: TechnologyStack) -> String {
+    let relative = dir.strip_prefix(root).unwrap_or(dir);
+    let mut hasher = Sha256::new();
+    hasher.update(relative.to_string_lossy().to_lowercase().as_bytes());
+    hasher.update(b"|");
+    hasher.update(file_name.as_bytes());
+    hasher.update(b"|");
+    hasher.update(format!("{:?}", stack).as_bytes());
+    format!("candidate-{}", &hex::encode(hasher.finalize())[..16])
+}
+
 fn parse_npm_scripts(content: &str) -> Vec<String> {
     let value: serde_json::Value = serde_json::from_str(content).unwrap_or(serde_json::Value::Null);
     let mut scripts = Vec::new();
     if let Some(obj) = value.get("scripts").and_then(|s| s.as_object()) {
-        for key in obj.keys() {
-            scripts.push(key.clone());
-        }
+        scripts.extend(obj.keys().cloned());
     }
     scripts.sort();
     scripts
+}
+
+fn preferred_node_scripts(scripts: &[String]) -> Vec<String> {
+    NODE_SCRIPT_PRIORITY
+        .iter()
+        .filter_map(|preferred| {
+            scripts
+                .iter()
+                .find(|script| script.eq_ignore_ascii_case(preferred))
+                .cloned()
+        })
+        .collect()
 }
 
 fn mark_conflicts(candidates: &mut [TechnologyCandidate]) {
@@ -177,5 +218,25 @@ fn mark_conflicts(candidates: &mut [TechnologyCandidate]) {
             c.status = CandidateStatus::Conflict;
             c.conflict_group = Some(format!("multi-stack-{}", c.directory));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_script_priority_prefers_dev_before_build() {
+        let scripts = vec!["build".to_string(), "dev".to_string(), "test".to_string()];
+        assert_eq!(preferred_node_scripts(&scripts), vec!["dev".to_string()]);
+    }
+
+    #[test]
+    fn node_script_priority_preserves_known_runtime_order() {
+        let scripts = vec!["serve".to_string(), "start".to_string(), "dev".to_string()];
+        assert_eq!(
+            preferred_node_scripts(&scripts),
+            vec!["dev".to_string(), "start".to_string(), "serve".to_string()]
+        );
     }
 }
