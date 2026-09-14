@@ -13,6 +13,7 @@ import type {
   RuntimeItem,
   WindowsServiceInfo,
   PortOccupancy,
+  ProjectInfo,
   ProjectScanResult,
 } from "./types";
 
@@ -173,6 +174,21 @@ export async function scanProjectDirectory(
 
 export async function projectIdForPath(rootPath: string): Promise<string> {
   return invoke("project_id_for_path", { rootPath });
+}
+
+export async function listProjects(): Promise<ProjectInfo[]> {
+  return invoke("list_projects");
+}
+
+export async function upsertProject(
+  rootPath: string,
+  name?: string,
+): Promise<ProjectInfo> {
+  return invoke("upsert_project", { rootPath, name: name ?? null });
+}
+
+export async function removeProject(projectId: string): Promise<OperationResult> {
+  return invoke("remove_project", { projectId });
 }
 
 export async function saveLaunchProfile(args: {
