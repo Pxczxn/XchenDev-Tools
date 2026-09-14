@@ -1,8 +1,7 @@
 //! Launch command sessions. After F001, `wait_for_child` waits outside `sessions` lock.
-//! Known limitation (F002): once `wait_for_child` has `take()`n the `Child`, `stop()` may set
-//! `Stopping` without killing the process because `session.child` is already `None`.
-//! Known limitation (follow-up): `launch_output.finalState` is always `"STOPPED"` even when the
-//! session is `Failed`; IPC/event sync is out of F001 scope.
+//! F002: `stop()` kills via `session.child` when present, otherwise `taskkill /PID` on the direct
+//! child (no `/T` — process-tree teardown is F003).
+//! Follow-up: `launch_output.finalState` is always `"STOPPED"` even when the session is `Failed`.
 
 use crate::domain::{LaunchSessionInfo, LaunchSessionState};
 use std::collections::HashMap;
@@ -109,13 +108,41 @@ impl CommandRunnerState {
     }
 
     pub fn stop(&self, session_id: &str) -> Result<(), String> {
-        let mut sessions = self.inner.sessions.lock().map_err(|_| "lock")?;
-        let session = sessions
-            .get_mut(session_id)
-            .ok_or_else(|| "LAUNCH_SESSION_NOT_FOUND:会话不存在".to_string())?;
-        session.info.state = LaunchSessionState::Stopping;
-        if let Some(child) = &mut session.child {
-            let _ = child.kill();
+        let plan = {
+            let mut sessions = self.inner.sessions.lock().map_err(|_| "lock")?;
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| "LAUNCH_SESSION_NOT_FOUND:会话不存在".to_string())?;
+            match session.info.state {
+                LaunchSessionState::Stopped | LaunchSessionState::Failed => return Ok(()),
+                LaunchSessionState::Stopping => StopPlan {
+                    pid: session.info.pid,
+                    must_attempt: false,
+                },
+                LaunchSessionState::Running | LaunchSessionState::Starting => {
+                    session.info.state = LaunchSessionState::Stopping;
+                    StopPlan {
+                        pid: session.info.pid,
+                        must_attempt: true,
+                    }
+                }
+            }
+        };
+
+        let mut terminated = false;
+        {
+            let mut sessions = self.inner.sessions.lock().map_err(|_| "lock")?;
+            if let Some(session) = sessions.get_mut(session_id) {
+                if let Some(child) = session.child.as_mut() {
+                    terminated = child.kill().is_ok();
+                }
+            }
+        }
+        if !terminated {
+            terminated = attempt_terminate(plan.pid);
+        }
+        if plan.must_attempt && !terminated {
+            return Err("LAUNCH_STOP_FAILED:无法向子进程发起终止".to_string());
         }
         Ok(())
     }
@@ -135,6 +162,32 @@ impl CommandRunnerState {
             .map(|m| m.values().map(|s| s.info.clone()).collect())
             .unwrap_or_default()
     }
+}
+
+struct StopPlan {
+    pid: Option<u32>,
+    must_attempt: bool,
+}
+
+fn attempt_terminate(pid: Option<u32>) -> bool {
+    pid.is_some_and(terminate_direct_child)
+}
+
+#[cfg(windows)]
+fn terminate_direct_child(pid: u32) -> bool {
+    let pid_arg = pid.to_string();
+    Command::new("taskkill")
+        .args(["/PID", &pid_arg, "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn terminate_direct_child(_pid: u32) -> bool {
+    false
 }
 
 fn stream_lines<R: Read>(app: &AppHandle, session_id: &str, stream: &str, pipe: R) {
@@ -302,6 +355,7 @@ fn wait_for_child_no_emit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command as OsCommand;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
@@ -336,6 +390,51 @@ mod tests {
         });
         rx.recv_timeout(Duration::from_millis(500))
             .expect("query should return within 500ms while child is running");
+    }
+
+    fn is_pid_alive(pid: u32) -> bool {
+        let filter = format!("PID eq {}", pid);
+        let output = OsCommand::new("tasklist")
+            .args(["/FI", &filter, "/NH"])
+            .output()
+            .expect("tasklist");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        stdout.contains(&pid.to_string()) && !stdout.contains("INFO: No tasks")
+    }
+
+    fn assert_pid_exits(pid: u32, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if !is_pid_alive(pid) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("pid {} still alive after {:?}", pid, timeout);
+    }
+
+    fn assert_never_running_again(
+        runner: &CommandRunnerState,
+        session_id: &str,
+        timeout: Duration,
+    ) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if let Some(info) = runner.get(session_id) {
+                assert_ne!(info.state, LaunchSessionState::Running);
+                if matches!(
+                    info.state,
+                    LaunchSessionState::Stopped | LaunchSessionState::Failed
+                ) {
+                    return;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "session {:?} did not reach terminal state within {:?}",
+            session_id, timeout
+        );
     }
 
     #[test]
@@ -426,5 +525,82 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         panic!("session did not reach terminal state within timeout");
+    }
+
+    #[test]
+    fn stop_terminates_direct_child() {
+        let runner = CommandRunnerState::new();
+        let info = runner
+            .start_for_test("profile-stop-kill", ".", "ping -n 30 127.0.0.1")
+            .expect("start");
+        let pid = info.pid.expect("pid");
+        std::thread::sleep(Duration::from_millis(200));
+        runner.stop(&info.launch_session_id).expect("stop should succeed");
+        assert_pid_exits(pid, Duration::from_secs(3));
+        let final_info =
+            wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
+        assert!(matches!(
+            final_info.state,
+            LaunchSessionState::Stopped | LaunchSessionState::Failed
+        ));
+    }
+
+    #[test]
+    fn stop_reaches_terminal_state_without_returning_to_running() {
+        let runner = CommandRunnerState::new();
+        let info = runner
+            .start_for_test("profile-stop-terminal", ".", "ping -n 30 127.0.0.1")
+            .expect("start");
+        std::thread::sleep(Duration::from_millis(200));
+        runner.stop(&info.launch_session_id).expect("stop should succeed");
+        if let Some(after_stop) = runner.get(&info.launch_session_id) {
+            assert_ne!(after_stop.state, LaunchSessionState::Running);
+        }
+        let final_info =
+            wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
+        assert!(matches!(
+            final_info.state,
+            LaunchSessionState::Stopped | LaunchSessionState::Failed
+        ));
+    }
+
+    #[test]
+    fn stop_is_idempotent_after_terminal() {
+        let runner = CommandRunnerState::new();
+        let info = runner
+            .start_for_test("profile-stop-idempotent", ".", "exit 0")
+            .expect("start");
+        wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
+        runner
+            .stop(&info.launch_session_id)
+            .expect("stop on terminal session should be idempotent");
+        runner
+            .stop(&info.launch_session_id)
+            .expect("duplicate stop should remain idempotent");
+        let final_info = runner.get(&info.launch_session_id).expect("session");
+        assert!(matches!(
+            final_info.state,
+            LaunchSessionState::Stopped | LaunchSessionState::Failed
+        ));
+    }
+
+    #[test]
+    fn wait_and_stop_race_still_terminates_direct_child() {
+        let runner = CommandRunnerState::new();
+        let info = runner
+            .start_for_test("profile-stop-race", ".", "ping -n 30 127.0.0.1")
+            .expect("start");
+        let session_id = info.launch_session_id.clone();
+        let pid = info.pid.expect("pid");
+        let runner_bg = runner.clone();
+        let sid = session_id.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            let _ = runner_bg.stop(&sid);
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        runner.stop(&session_id).expect("stop should succeed under race");
+        assert_pid_exits(pid, Duration::from_secs(3));
+        assert_never_running_again(&runner, &session_id, Duration::from_secs(5));
     }
 }
