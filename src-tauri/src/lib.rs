@@ -33,6 +33,7 @@ pub fn run() {
             terminate_directory_process,
             scan_project_directory,
             save_launch_profile,
+            save_launch_profile_safe,
             list_launch_profiles,
             issue_launch_confirmation,
             start_launch_profile,
