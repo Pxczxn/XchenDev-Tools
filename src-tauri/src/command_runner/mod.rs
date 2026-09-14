@@ -1,6 +1,8 @@
 //! Launch command sessions. After F001, `wait_for_child` waits outside `sessions` lock.
 //! Known limitation (F002): once `wait_for_child` has `take()`n the `Child`, `stop()` may set
 //! `Stopping` without killing the process because `session.child` is already `None`.
+//! Known limitation (follow-up): `launch_output.finalState` is always `"STOPPED"` even when the
+//! session is `Failed`; IPC/event sync is out of F001 scope.
 
 use crate::domain::{LaunchSessionInfo, LaunchSessionState};
 use std::collections::HashMap;
@@ -155,7 +157,7 @@ fn stream_lines<R: Read>(app: &AppHandle, session_id: &str, stream: &str, pipe: 
     }
 }
 
-fn reap_child(runner: &CommandRunnerState, session_id: &str) -> Option<i32> {
+fn wait_on_child(runner: &CommandRunnerState, session_id: &str) -> (Option<i32>, LaunchSessionState) {
     let child = {
         let mut guard = runner.inner.sessions.lock().unwrap();
         guard
@@ -163,13 +165,30 @@ fn reap_child(runner: &CommandRunnerState, session_id: &str) -> Option<i32> {
             .and_then(|session| session.child.take())
     };
 
-    let (exit_code, final_state) = match child {
+    match child {
         Some(mut child) => match child.wait() {
             Ok(status) => (status.code(), LaunchSessionState::Stopped),
             Err(_) => (None, LaunchSessionState::Failed),
         },
         None => (None, LaunchSessionState::Stopped),
-    };
+    }
+}
+
+/// Clears `profile_running` before publishing `Stopped` / `Failed` so a terminal `get()` never
+/// races with `LAUNCH_ALREADY_RUNNING` on immediate restart.
+fn publish_terminal_session(
+    runner: &CommandRunnerState,
+    session_id: &str,
+    profile_id: &str,
+    exit_code: Option<i32>,
+    final_state: LaunchSessionState,
+) -> Option<i32> {
+    runner
+        .inner
+        .profile_running
+        .lock()
+        .unwrap()
+        .remove(profile_id);
 
     {
         let mut guard = runner.inner.sessions.lock().unwrap();
@@ -182,13 +201,22 @@ fn reap_child(runner: &CommandRunnerState, session_id: &str) -> Option<i32> {
     exit_code
 }
 
+fn finalize_child_exit(
+    runner: &CommandRunnerState,
+    session_id: &str,
+    profile_id: &str,
+) -> Option<i32> {
+    let (exit_code, final_state) = wait_on_child(runner, session_id);
+    publish_terminal_session(runner, session_id, profile_id, exit_code, final_state)
+}
+
 fn wait_for_child(
     app: AppHandle,
     runner: CommandRunnerState,
     session_id: String,
     profile_id: String,
 ) {
-    let exit_code = reap_child(&runner, &session_id);
+    let exit_code = finalize_child_exit(&runner, &session_id, &profile_id);
 
     let _ = app.emit(
         "launch_output",
@@ -201,13 +229,6 @@ fn wait_for_child(
             "finalState": "STOPPED"
         }),
     );
-
-    runner
-        .inner
-        .profile_running
-        .lock()
-        .unwrap()
-        .remove(&profile_id);
 }
 
 #[cfg(test)]
@@ -275,13 +296,7 @@ fn wait_for_child_no_emit(
     session_id: String,
     profile_id: String,
 ) {
-    reap_child(&runner, &session_id);
-    runner
-        .inner
-        .profile_running
-        .lock()
-        .unwrap()
-        .remove(&profile_id);
+    finalize_child_exit(&runner, &session_id, &profile_id);
 }
 
 #[cfg(test)]
@@ -391,11 +406,25 @@ mod tests {
         let info = runner
             .start_for_test(profile_id, ".", "exit 0")
             .expect("start");
-        wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
 
-        let second = runner
-            .start_for_test(profile_id, ".", "exit 0")
-            .expect("second start should succeed after profile_running cleanup");
-        wait_until_terminal(&runner, &second.launch_session_id, Duration::from_secs(5));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Some(session) = runner.get(&info.launch_session_id) {
+                if matches!(
+                    session.state,
+                    LaunchSessionState::Stopped | LaunchSessionState::Failed
+                ) {
+                    let second = runner
+                        .start_for_test(profile_id, ".", "exit 0")
+                        .expect(
+                            "second start must succeed immediately once terminal state is observable",
+                        );
+                    wait_until_terminal(&runner, &second.launch_session_id, Duration::from_secs(5));
+                    return;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("session did not reach terminal state within timeout");
     }
 }
