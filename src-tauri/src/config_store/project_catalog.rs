@@ -58,13 +58,9 @@ fn normalize_root_path(root_path: &str) -> Result<String, String> {
     if !path.is_dir() {
         return Err("PROJECT_ROOT_INVALID:项目目录不存在".to_string());
     }
-    let canonical = fs::canonicalize(&path)
-        .map_err(|e| format!("PROJECT_ROOT_INVALID:{}", e))?;
-    let mut value = canonical.to_string_lossy().to_string();
-    if let Some(stripped) = value.strip_prefix(r"\\?\") {
-        value = stripped.to_string();
-    }
-    Ok(value)
+    fs::canonicalize(&path)
+        .map(|canonical| canonical.to_string_lossy().to_string())
+        .map_err(|e| format!("PROJECT_ROOT_INVALID:{}", e))
 }
 
 fn default_name(root_path: &str) -> String {
