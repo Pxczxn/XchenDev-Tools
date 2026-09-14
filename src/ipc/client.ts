@@ -223,7 +223,7 @@ export async function startLaunchProfile(
   profileId: string,
   confirmationToken: string,
 ): Promise<LaunchSessionInfo> {
-  return invoke("start_launch_profile", { profileId, confirmationToken });
+  return invoke("start_launch_profile_safe", { profileId, confirmationToken });
 }
 
 export async function stopLaunchSession(
