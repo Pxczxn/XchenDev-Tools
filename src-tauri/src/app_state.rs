@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const ENV_DETECTION_CACHE_TTL: Duration = Duration::from_secs(120);
+pub const LAUNCH_CONFIRMATION_TTL_SECS: i64 = 120;
 
 #[derive(Clone)]
 struct EnvironmentDetectionCache {
@@ -113,17 +114,26 @@ impl AppState {
         let digest = hex::encode(hasher.finalize());
         let token = Uuid::new_v4().to_string();
         let summary = format!("{} @ {}", command, working_directory);
+        let now = Utc::now();
         let pending = PendingConfirmation {
             token: token.clone(),
             profile_id: profile_id.to_string(),
             binding_digest: digest,
-            created_at: Utc::now(),
+            created_at: now,
             consumed: false,
         };
-        self.confirmations
+        let mut confirmations = self
+            .confirmations
             .lock()
-            .map_err(|_| "CONFIRMATION_ISSUE_FAILED:锁失败".to_string())?
-            .insert(token.clone(), pending);
+            .map_err(|_| "CONFIRMATION_ISSUE_FAILED:锁失败".to_string())?;
+        confirmations.retain(|_, item| {
+            !item.consumed
+                && Utc::now()
+                    .signed_duration_since(item.created_at)
+                    .num_seconds()
+                    <= LAUNCH_CONFIRMATION_TTL_SECS
+        });
+        confirmations.insert(token.clone(), pending);
         Ok((token, summary))
     }
 
@@ -145,12 +155,41 @@ impl AppState {
             .lock()
             .map_err(|_| "LAUNCH_CONFIRMATION_REQUIRED:确认无效".to_string())?;
         let pending = map
-            .get_mut(token)
+            .get(token)
+            .cloned()
             .ok_or_else(|| "LAUNCH_CONFIRMATION_REQUIRED:确认令牌不存在".to_string())?;
-        if pending.consumed || pending.profile_id != profile_id || pending.binding_digest != digest {
+        let age_seconds = Utc::now()
+            .signed_duration_since(pending.created_at)
+            .num_seconds();
+        if pending.consumed
+            || age_seconds < 0
+            || age_seconds > LAUNCH_CONFIRMATION_TTL_SECS
+            || pending.profile_id != profile_id
+            || pending.binding_digest != digest
+        {
+            map.remove(token);
             return Err("LAUNCH_CONFIRMATION_REQUIRED:确认令牌无效或已过期".to_string());
         }
-        pending.consumed = true;
+        map.remove(token);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confirmation_is_single_use() {
+        let state = AppState::new();
+        let (token, _) = state
+            .issue_confirmation("p", "echo ok", ".", "frontend")
+            .unwrap();
+        state
+            .consume_confirmation(&token, "p", "echo ok", ".", "frontend")
+            .unwrap();
+        assert!(state
+            .consume_confirmation(&token, "p", "echo ok", ".", "frontend")
+            .is_err());
     }
 }
