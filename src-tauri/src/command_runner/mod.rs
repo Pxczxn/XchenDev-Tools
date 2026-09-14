@@ -1,9 +1,10 @@
 //! Launch command sessions. After F001, `wait_for_child` waits outside `sessions` lock.
-//! F002: `stop()` kills via `session.child` when present, otherwise `taskkill /PID` on the direct
-//! child (no `/T` — process-tree teardown is F003).
+//! F002: `stop()` kills via `session.child` when present; otherwise `taskkill /PID` only after
+//! verifying pid + start time match the direct child recorded at spawn (no `/T` — F003).
 //! Follow-up: `launch_output.finalState` is always `"STOPPED"` even when the session is `Failed`.
 
 use crate::domain::{LaunchSessionInfo, LaunchSessionState};
+use crate::process_manager::process_start_time_secs;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
@@ -11,9 +12,45 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
+/// Direct child identity for PID fallback (not exposed on `LaunchSessionInfo`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DirectChildIdentity {
+    pid: u32,
+    start_time_secs: u64,
+}
+
+impl DirectChildIdentity {
+    fn capture(pid: u32) -> Result<Self, String> {
+        let start_time_secs = process_start_time_secs(pid).ok_or_else(|| {
+            "LAUNCH_START_FAILED:无法读取子进程启动时间".to_string()
+        })?;
+        Ok(Self {
+            pid,
+            start_time_secs,
+        })
+    }
+}
+
+enum PidIdentityVerdict {
+    Gone,
+    Matches,
+    Mismatch,
+}
+
+fn verify_pid_identity(expected: &DirectChildIdentity) -> PidIdentityVerdict {
+    match process_start_time_secs(expected.pid) {
+        None => PidIdentityVerdict::Gone,
+        Some(start_time_secs) if start_time_secs == expected.start_time_secs => {
+            PidIdentityVerdict::Matches
+        }
+        Some(_) => PidIdentityVerdict::Mismatch,
+    }
+}
+
 struct LaunchSession {
     info: LaunchSessionInfo,
     child: Option<Child>,
+    direct_child: DirectChildIdentity,
 }
 
 #[derive(Clone)]
@@ -63,6 +100,7 @@ impl CommandRunnerState {
             .map_err(|e| format!("LAUNCH_START_FAILED:{}", e))?;
 
         let pid = child.id();
+        let direct_child = DirectChildIdentity::capture(pid)?;
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
@@ -79,6 +117,7 @@ impl CommandRunnerState {
             LaunchSession {
                 info: info.clone(),
                 child: Some(child),
+                direct_child,
             },
         );
         self.inner
@@ -108,43 +147,22 @@ impl CommandRunnerState {
     }
 
     pub fn stop(&self, session_id: &str) -> Result<(), String> {
-        let plan = {
+        let direct_child = {
             let mut sessions = self.inner.sessions.lock().map_err(|_| "lock")?;
             let session = sessions
                 .get_mut(session_id)
                 .ok_or_else(|| "LAUNCH_SESSION_NOT_FOUND:会话不存在".to_string())?;
             match session.info.state {
                 LaunchSessionState::Stopped | LaunchSessionState::Failed => return Ok(()),
-                LaunchSessionState::Stopping => StopPlan {
-                    pid: session.info.pid,
-                    must_attempt: false,
-                },
+                LaunchSessionState::Stopping => session.direct_child,
                 LaunchSessionState::Running | LaunchSessionState::Starting => {
                     session.info.state = LaunchSessionState::Stopping;
-                    StopPlan {
-                        pid: session.info.pid,
-                        must_attempt: true,
-                    }
+                    session.direct_child
                 }
             }
         };
 
-        let mut terminated = false;
-        {
-            let mut sessions = self.inner.sessions.lock().map_err(|_| "lock")?;
-            if let Some(session) = sessions.get_mut(session_id) {
-                if let Some(child) = session.child.as_mut() {
-                    terminated = child.kill().is_ok();
-                }
-            }
-        }
-        if !terminated {
-            terminated = attempt_terminate(plan.pid);
-        }
-        if plan.must_attempt && !terminated {
-            return Err("LAUNCH_STOP_FAILED:无法向子进程发起终止".to_string());
-        }
-        Ok(())
+        attempt_stop_terminate(self, session_id, direct_child)
     }
 
     pub fn get(&self, session_id: &str) -> Option<LaunchSessionInfo> {
@@ -164,17 +182,62 @@ impl CommandRunnerState {
     }
 }
 
-struct StopPlan {
-    pid: Option<u32>,
-    must_attempt: bool,
+fn attempt_stop_terminate(
+    runner: &CommandRunnerState,
+    session_id: &str,
+    direct_child: DirectChildIdentity,
+) -> Result<(), String> {
+    {
+        let mut sessions = runner.inner.sessions.lock().map_err(|_| "lock")?;
+        if let Some(session) = sessions.get_mut(session_id) {
+            if let Some(child) = session.child.as_mut() {
+                if child.kill().is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    match verify_pid_identity(&direct_child) {
+        PidIdentityVerdict::Gone => Ok(()),
+        PidIdentityVerdict::Mismatch => {
+            Err("LAUNCH_PROCESS_IDENTITY_MISMATCH:PID 已被其他进程复用".to_string())
+        }
+        PidIdentityVerdict::Matches => {
+            if terminate_direct_child(direct_child.pid) {
+                Ok(())
+            } else {
+                // Concurrent stop or fast exit: process may disappear after verify but before taskkill.
+                match verify_pid_identity(&direct_child) {
+                    PidIdentityVerdict::Gone => Ok(()),
+                    _ => Err("LAUNCH_STOP_FAILED:无法向子进程发起终止".to_string()),
+                }
+            }
+        }
+    }
 }
 
-fn attempt_terminate(pid: Option<u32>) -> bool {
-    pid.is_some_and(terminate_direct_child)
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(test)]
+static TEST_FORCE_TASKKILL_FAIL: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+fn test_force_taskkill_fail() -> bool {
+    TEST_FORCE_TASKKILL_FAIL.load(Ordering::SeqCst)
+}
+
+#[cfg(not(test))]
+fn test_force_taskkill_fail() -> bool {
+    false
 }
 
 #[cfg(windows)]
 fn terminate_direct_child(pid: u32) -> bool {
+    if test_force_taskkill_fail() {
+        return false;
+    }
     let pid_arg = pid.to_string();
     Command::new("taskkill")
         .args(["/PID", &pid_arg, "/F"])
@@ -286,6 +349,28 @@ fn wait_for_child(
 
 #[cfg(test)]
 impl CommandRunnerState {
+    fn test_take_child(&self, session_id: &str) {
+        self.inner
+            .sessions
+            .lock()
+            .unwrap()
+            .get_mut(session_id)
+            .expect("session")
+            .child
+            .take();
+    }
+
+    fn test_set_direct_child_start_time(&self, session_id: &str, wrong_start_time_secs: u64) {
+        self.inner
+            .sessions
+            .lock()
+            .unwrap()
+            .get_mut(session_id)
+            .expect("session")
+            .direct_child
+            .start_time_secs = wrong_start_time_secs;
+    }
+
     /// Spawns a session and reaper thread without stdout/stderr IPC (tests only).
     fn start_for_test(
         &self,
@@ -313,6 +398,7 @@ impl CommandRunnerState {
             .map_err(|e| format!("LAUNCH_START_FAILED:{}", e))?;
 
         let pid = child.id();
+        let direct_child = DirectChildIdentity::capture(pid)?;
         let info = LaunchSessionInfo {
             launch_session_id: session_id.clone(),
             profile_id: profile_id.to_string(),
@@ -326,6 +412,7 @@ impl CommandRunnerState {
             LaunchSession {
                 info: info.clone(),
                 child: Some(child),
+                direct_child,
             },
         );
         self.inner
@@ -355,7 +442,7 @@ fn wait_for_child_no_emit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command as OsCommand;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
@@ -393,13 +480,7 @@ mod tests {
     }
 
     fn is_pid_alive(pid: u32) -> bool {
-        let filter = format!("PID eq {}", pid);
-        let output = OsCommand::new("tasklist")
-            .args(["/FI", &filter, "/NH"])
-            .output()
-            .expect("tasklist");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout.contains(&pid.to_string()) && !stdout.contains("INFO: No tasks")
+        process_start_time_secs(pid).is_some()
     }
 
     fn assert_pid_exits(pid: u32, timeout: Duration) {
@@ -602,5 +683,83 @@ mod tests {
         runner.stop(&session_id).expect("stop should succeed under race");
         assert_pid_exits(pid, Duration::from_secs(3));
         assert_never_running_again(&runner, &session_id, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn pid_fallback_rejects_identity_mismatch_without_terminating() {
+        let runner = CommandRunnerState::new();
+        let info = runner
+            .start_for_test("profile-identity-mismatch", ".", "ping -n 30 127.0.0.1")
+            .expect("start");
+        let pid = info.pid.expect("pid");
+        std::thread::sleep(Duration::from_millis(200));
+        runner.test_set_direct_child_start_time(&info.launch_session_id, 1);
+        runner.test_take_child(&info.launch_session_id);
+        let err = runner
+            .stop(&info.launch_session_id)
+            .expect_err("mismatch must not terminate");
+        assert!(
+            err.contains("LAUNCH_PROCESS_IDENTITY_MISMATCH"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            is_pid_alive(pid),
+            "direct child should remain alive after identity mismatch"
+        );
+        runner.stop(&info.launch_session_id).expect_err("still mismatched");
+        runner.test_set_direct_child_start_time(
+            &info.launch_session_id,
+            process_start_time_secs(pid).expect("live pid"),
+        );
+        runner.stop(&info.launch_session_id).expect("valid identity stop");
+        assert_pid_exits(pid, Duration::from_secs(3));
+        wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn stop_ok_when_direct_child_already_exited_before_pid_fallback() {
+        let runner = CommandRunnerState::new();
+        let info = runner
+            .start_for_test("profile-exit-fallback", ".", "exit 0")
+            .expect("start");
+        std::thread::sleep(Duration::from_millis(150));
+        runner.test_take_child(&info.launch_session_id);
+        runner
+            .stop(&info.launch_session_id)
+            .expect("stop should succeed when pid is already gone");
+        wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn stopping_stop_err_when_process_still_alive_and_terminate_fails() {
+        let runner = CommandRunnerState::new();
+        let info = runner
+            .start_for_test("profile-stopping-fail", ".", "ping -n 30 127.0.0.1")
+            .expect("start");
+        std::thread::sleep(Duration::from_millis(200));
+        runner.test_take_child(&info.launch_session_id);
+        {
+            let mut sessions = runner.inner.sessions.lock().unwrap();
+            let session = sessions.get_mut(&info.launch_session_id).expect("session");
+            session.info.state = LaunchSessionState::Stopping;
+        }
+        TEST_FORCE_TASKKILL_FAIL.store(true, Ordering::SeqCst);
+        let err = runner
+            .stop(&info.launch_session_id)
+            .expect_err("live process with failed terminate must error");
+        TEST_FORCE_TASKKILL_FAIL.store(false, Ordering::SeqCst);
+        assert!(
+            err.contains("LAUNCH_STOP_FAILED"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            is_pid_alive(info.pid.expect("pid")),
+            "process should remain alive when terminate failed"
+        );
+        runner
+            .stop(&info.launch_session_id)
+            .expect("stop should succeed once taskkill works again");
+        assert_pid_exits(info.pid.expect("pid"), Duration::from_secs(3));
+        wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
     }
 }

@@ -12,6 +12,19 @@ use crate::security_guard::{protection_for_process, snapshot_digest};
 use crate::security_guard;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
+/// Process start time in seconds since UNIX epoch (sysinfo), if `pid` currently exists.
+pub fn process_start_time_secs(pid: u32) -> Option<u64> {
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+        true,
+        ProcessRefreshKind::everything(),
+    );
+    system
+        .process(Pid::from_u32(pid))
+        .map(|process| process.start_time())
+}
+
 pub fn find_process_summary(pid: u32) -> Option<ProcessSummary> {
     let mut system = System::new();
     system.refresh_processes_specifics(
