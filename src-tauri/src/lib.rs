@@ -36,6 +36,7 @@ pub fn run() {
             save_launch_profile_safe,
             list_launch_profiles,
             issue_launch_confirmation,
+            issue_launch_confirmation_safe,
             start_launch_profile,
             stop_launch_session,
             project_id_for_path,
