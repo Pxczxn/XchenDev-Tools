@@ -1,8 +1,14 @@
 use crate::app_state::AppState;
-use crate::domain::{LaunchProfile, ProcessRole};
+use crate::domain::{LaunchProfile, LaunchSessionInfo, ProcessRole};
 use crate::security_guard;
+use std::sync::{Mutex, OnceLock};
 use tauri::State;
 use uuid::Uuid;
+
+fn launch_start_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[tauri::command]
 pub fn save_launch_profile_safe(
@@ -57,4 +63,38 @@ pub fn save_launch_profile_safe(
         port_hint: None,
     })?;
     Ok(profile_id)
+}
+
+#[tauri::command]
+pub fn start_launch_profile_safe(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    profile_id: String,
+    confirmation_token: String,
+) -> Result<LaunchSessionInfo, String> {
+    let _start_guard = launch_start_lock()
+        .lock()
+        .map_err(|_| "LAUNCH_START_FAILED:启动锁失败".to_string())?;
+
+    let profile = state
+        .config
+        .get_profile(&profile_id)
+        .ok_or_else(|| "PROFILE_NOT_FOUND:配置不存在".to_string())?;
+    let role = match profile.process_role {
+        ProcessRole::Frontend => "frontend",
+        ProcessRole::Backend => "backend",
+    };
+    state.consume_confirmation(
+        &confirmation_token,
+        &profile.profile_id,
+        &profile.command,
+        &profile.working_directory,
+        role,
+    )?;
+    state.command_runner.start(
+        &app,
+        &profile.profile_id,
+        &profile.working_directory,
+        &profile.command,
+    )
 }
