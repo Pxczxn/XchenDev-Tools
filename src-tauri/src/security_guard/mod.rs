@@ -160,6 +160,8 @@ fn first_command_token(command: &str) -> Option<&str> {
 
 fn command_basename(token: &str) -> String {
     token
+        .trim()
+        .trim_start_matches('@')
         .rsplit(['\\', '/'])
         .next()
         .unwrap_or(token)
@@ -174,7 +176,7 @@ fn has_unquoted_shell_control(command: &str) -> bool {
             in_double_quotes = !in_double_quotes;
             continue;
         }
-        if !in_double_quotes && matches!(ch, '&' | '|' | '>' | '<' | '^') {
+        if !in_double_quotes && matches!(ch, '&' | '|' | '>' | '<' | '^' | '(' | ')') {
             return true;
         }
     }
@@ -195,7 +197,7 @@ pub fn validate_command_policy(command: &str) -> Result<(), String> {
     }
     if has_unquoted_shell_control(command) {
         return Err(
-            "COMMAND_POLICY_REJECTED:启动命令不允许 shell 链接、重定向或转义控制符"
+            "COMMAND_POLICY_REJECTED:启动命令不允许 shell 链接、重定向、分组或转义控制符"
                 .to_string(),
         );
     }
@@ -336,6 +338,8 @@ mod tests {
             "npm run dev | powershell -Command whoami",
             "npm run dev > output.log",
             "npm run dev ^& taskkill /PID 1 /F",
+            "(taskkill /PID 1 /F)",
+            "npm run dev (taskkill /PID 1 /F)",
             "npm run dev\r\ndel important.txt",
         ];
         for command in rejected {
@@ -371,6 +375,8 @@ mod tests {
             "del important.txt",
             "sc stop MySQL80",
             "start npm run dev",
+            "@taskkill /PID 123 /F",
+            "@@powershell -Command Get-Process",
         ];
         for command in rejected {
             assert!(
@@ -382,6 +388,6 @@ mod tests {
 
     #[test]
     fn launch_policy_allows_literal_metacharacters_inside_quotes() {
-        assert!(validate_command_policy("node -e \"console.log('a|b&c>')\"").is_ok());
+        assert!(validate_command_policy("node -e \"console.log('a|b&c>()')\"").is_ok());
     }
 }
