@@ -12,6 +12,42 @@ use crate::security_guard::{protection_for_process, snapshot_digest};
 use crate::security_guard;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
+#[cfg(windows)]
+pub struct ProcessIdentityGuard(windows::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for ProcessIdentityGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub struct ProcessIdentityGuard;
+
+/// Keep the current process object alive while a PID-based operation is in flight.
+/// On Windows, a PID cannot be reused until all handles to the terminated process are closed.
+pub fn pin_process_identity(pid: u32) -> Result<ProcessIdentityGuard, String> {
+    if process_start_time_secs(pid).is_none() {
+        return Err("PROCESS_NOT_FOUND:进程不存在".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+            .map_err(|e| format!("TERMINATE_DENIED:无法锁定目标进程身份 {}", e))?;
+        Ok(ProcessIdentityGuard(handle))
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(ProcessIdentityGuard)
+    }
+}
+
 /// Process start time in seconds since UNIX epoch (sysinfo), if `pid` currently exists.
 pub fn process_start_time_secs(pid: u32) -> Option<u64> {
     let mut system = System::new();
@@ -132,4 +168,19 @@ pub fn protection(summary: &ProcessSummary) -> ProtectionDecision {
 
 pub fn protection_with_extra(summary: &ProcessSummary, extra: &[String]) -> ProtectionDecision {
     security_guard::protection_for_process_with_extra(summary, extra)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pin_current_process_identity_succeeds() {
+        let _guard = pin_process_identity(std::process::id()).expect("pin current process");
+    }
+
+    #[test]
+    fn pin_missing_process_identity_fails() {
+        assert!(pin_process_identity(u32::MAX).is_err());
+    }
 }
