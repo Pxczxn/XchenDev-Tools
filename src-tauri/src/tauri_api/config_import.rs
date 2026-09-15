@@ -6,7 +6,7 @@ use crate::history_retention::prune_config_history;
 use crate::security_guard;
 use crate::settings_guard::normalize_settings;
 use chrono::Utc;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tauri::State;
 
 use super::launch_profiles::launch_lifecycle_lock;
@@ -56,6 +56,16 @@ fn logical_workdir_key(path: &str) -> String {
         .to_lowercase()
 }
 
+fn logical_path_is_within(root_key: &str, path_key: &str) -> bool {
+    if root_key.is_empty() || path_key.is_empty() {
+        return false;
+    }
+    path_key == root_key
+        || path_key
+            .strip_prefix(root_key)
+            .is_some_and(|rest| rest.starts_with('\\'))
+}
+
 fn validate_import_projects(config: &AppConfig) -> Result<(), String> {
     let mut project_ids = HashSet::new();
     let mut roots = HashSet::new();
@@ -88,10 +98,15 @@ fn validate_import_projects(config: &AppConfig) -> Result<(), String> {
 }
 
 fn validate_import_profiles(config: &AppConfig) -> Result<(), String> {
-    let project_ids: HashSet<&str> = config
+    let project_roots: HashMap<&str, String> = config
         .projects
         .iter()
-        .map(|project| project.project_id.as_str())
+        .map(|project| {
+            (
+                project.project_id.as_str(),
+                logical_workdir_key(&project.root_path),
+            )
+        })
         .collect();
     let mut profile_ids = HashSet::new();
     let mut slots = HashSet::new();
@@ -107,12 +122,12 @@ fn validate_import_profiles(config: &AppConfig) -> Result<(), String> {
                 profile.profile_id
             ));
         }
-        if !project_ids.contains(profile.project_id.as_str()) {
+        let Some(project_root_key) = project_roots.get(profile.project_id.as_str()) else {
             return Err(format!(
                 "PROFILE_INVALID:启动配置 {} 引用了不存在的项目 {}",
                 profile.profile_id, profile.project_id
             ));
-        }
+        };
 
         security_guard::validate_command_policy(profile.command.trim())?;
 
@@ -121,6 +136,12 @@ fn validate_import_profiles(config: &AppConfig) -> Result<(), String> {
             return Err(format!(
                 "PROFILE_INVALID:启动配置 {} 的工作目录不能为空",
                 profile.profile_id
+            ));
+        }
+        if !logical_path_is_within(project_root_key, &workdir_key) {
+            return Err(format!(
+                "PROFILE_INVALID:启动配置 {} 的工作目录不属于项目 {}",
+                profile.profile_id, profile.project_id
             ));
         }
 
@@ -333,6 +354,50 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serialize");
         let err = normalize_import_content(&json).expect_err("orphan profile must fail");
         assert!(err.contains("引用了不存在的项目"));
+    }
+
+    #[test]
+    fn import_accepts_workdir_inside_project_with_path_variants() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config.launch_profiles.push(profile(
+            "profile-a",
+            r"\\?\C:\demo\web\",
+            Some("candidate-a"),
+        ));
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        assert!(normalize_import_content(&json).is_ok());
+    }
+
+    #[test]
+    fn import_rejects_workdir_outside_project() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config.launch_profiles.push(profile(
+            "profile-a",
+            "C:\\other\\web",
+            Some("candidate-a"),
+        ));
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("outside workdir must fail");
+        assert!(err.contains("工作目录不属于项目"));
+    }
+
+    #[test]
+    fn import_rejects_sibling_prefix_as_project_child() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config.launch_profiles.push(profile(
+            "profile-a",
+            "C:\\demox\\web",
+            Some("candidate-a"),
+        ));
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("sibling prefix must fail");
+        assert!(err.contains("工作目录不属于项目"));
     }
 
     #[test]
