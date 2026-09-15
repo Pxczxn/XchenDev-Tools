@@ -23,8 +23,17 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Upgrade Vitest
-        run: npm install --save-dev "vitest@^4.1.11" --ignore-scripts
+      - name: Use npm 11
+        run: npm install --global npm@11
+
+      - name: Update Vitest dependency
+        shell: pwsh
+        run: |
+          npm pkg set "devDependencies.vitest=^4.1.11"
+          npm install --package-lock-only --ignore-scripts
+
+      - name: Install upgraded dependencies
+        run: npm ci --ignore-scripts
 
       - name: Frontend tests
         run: npm test
