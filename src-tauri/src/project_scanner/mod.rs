@@ -47,6 +47,14 @@ pub fn scan_project_directory(root_path: &str) -> Result<ProjectScanResult, Stri
     })
 }
 
+fn read_scan_entries(dir: &Path, level: u8) -> Result<Option<fs::ReadDir>, String> {
+    match fs::read_dir(dir) {
+        Ok(entries) => Ok(Some(entries)),
+        Err(error) if level == 1 => Err(format!("PROJECT_SCAN_FAILED:{}", error)),
+        Err(_) => Ok(None),
+    }
+}
+
 fn scan_tree(
     dir: &Path,
     root: &Path,
@@ -58,7 +66,9 @@ fn scan_tree(
         return Ok(());
     }
 
-    let entries = fs::read_dir(dir).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
+    let Some(entries) = read_scan_entries(dir, level)? else {
+        return Ok(());
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if should_skip_directory(&path) {
@@ -365,6 +375,15 @@ mod tests {
             preferred_node_scripts(&scripts),
             vec!["dev".to_string(), "start".to_string(), "serve".to_string()]
         );
+    }
+
+    #[test]
+    fn root_scan_read_error_is_fatal_but_nested_read_error_is_skipped() {
+        let root = tempdir().expect("root");
+        let missing = root.path().join("missing");
+
+        assert!(read_scan_entries(&missing, 1).is_err());
+        assert!(read_scan_entries(&missing, 2).expect("nested policy").is_none());
     }
 
     #[test]
