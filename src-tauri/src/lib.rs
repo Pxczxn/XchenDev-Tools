@@ -71,25 +71,32 @@ mod ipc_contract_tests {
 
     fn quoted_invoke_commands(source: &str) -> BTreeSet<String> {
         let mut commands = BTreeSet::new();
-        let mut remaining = source;
+        let mut offset = 0usize;
 
-        while let Some(invoke_pos) = remaining.find("invoke") {
-            let after_invoke = &remaining[invoke_pos + "invoke".len()..];
-            let Some(paren_pos) = after_invoke.find('(') else {
-                break;
-            };
-            let args = &after_invoke[paren_pos + 1..];
-            let Some(quote_pos) = args.find('"') else {
-                remaining = args;
-                continue;
-            };
-            let after_quote = &args[quote_pos + 1..];
-            let Some(end) = after_quote.find('"') else {
-                break;
+        while let Some(relative) = source[offset..].find("invoke") {
+            let invoke_start = offset + relative;
+            let after_token = &source[invoke_start + "invoke".len()..];
+            let trimmed = after_token.trim_start();
+            let call_args = if let Some(rest) = trimmed.strip_prefix('(') {
+                Some(rest)
+            } else if let Some(generic) = trimmed.strip_prefix('<') {
+                generic
+                    .find('>')
+                    .and_then(|generic_end| generic[generic_end + 1..].trim_start().strip_prefix('('))
+            } else {
+                None
             };
 
-            commands.insert(after_quote[..end].to_string());
-            remaining = &after_quote[end + 1..];
+            if let Some(args) = call_args {
+                let args = args.trim_start();
+                if let Some(after_quote) = args.strip_prefix('"') {
+                    if let Some(end) = after_quote.find('"') {
+                        commands.insert(after_quote[..end].to_string());
+                    }
+                }
+            }
+
+            offset = invoke_start + "invoke".len();
         }
 
         commands
@@ -123,6 +130,9 @@ mod ipc_contract_tests {
         let backend = include_str!("lib.rs");
         let invoked = quoted_invoke_commands(client);
         let registered = registered_handler_commands(backend);
+
+        assert!(invoked.contains("health_check"), "invoke parser must capture generic calls");
+        assert!(invoked.len() >= 20, "invoke parser captured suspiciously few commands: {invoked:?}");
 
         let missing: Vec<_> = invoked.difference(&registered).cloned().collect();
         assert!(
