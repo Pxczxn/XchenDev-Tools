@@ -231,10 +231,39 @@ pub fn terminate_directory_process_safe(
     expected_name: String,
     expected_cwd: Option<String>,
 ) -> Result<OperationResult, String> {
+    validate_mode(&mode)?;
+    let target = format!("pid:{}:{}:directory", pid, expected_name);
+
+    let _identity_guard = match process_manager::pin_process_identity(pid) {
+        Ok(guard) => guard,
+        Err(error) if error.starts_with("PROCESS_NOT_FOUND:") => {
+            return Ok(record_rejected_snapshot(
+                &state,
+                "TERMINATE_DIRECTORY_PROCESS",
+                &target,
+                "PROCESS_SNAPSHOT_MISMATCH",
+                "进程快照已失效，请刷新",
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+
+    state.consume_process_confirmation(
+        &confirmation_token,
+        pid,
+        &expected_name,
+        expected_cwd.as_deref(),
+        &mode,
+    )?;
+    process_manager::verify_process_snapshot(pid, &expected_name, expected_cwd.as_deref())?;
+
     let current = match process_manager::find_process_summary(pid) {
         Some(summary) => summary,
         None => {
-            return Ok(OperationResult::rejected(
+            return Ok(record_rejected_snapshot(
+                &state,
+                "TERMINATE_DIRECTORY_PROCESS",
+                &target,
                 "PROCESS_SNAPSHOT_MISMATCH",
                 "进程快照已失效，请刷新",
             ));
@@ -243,19 +272,23 @@ pub fn terminate_directory_process_safe(
     let current_digest =
         process_manager::digest_for(pid, &current.name, current.working_directory.as_deref());
     if current_digest != snapshot_digest {
-        return Ok(OperationResult::rejected(
+        return Ok(record_rejected_snapshot(
+            &state,
+            "TERMINATE_DIRECTORY_PROCESS",
+            &target,
             "PROCESS_SNAPSHOT_MISMATCH",
             "进程快照已失效，请刷新",
         ));
     }
 
-    terminate_process_safe(
-        state,
+    let force = mode.eq_ignore_ascii_case("force");
+    execute_termination(
+        &state,
         pid,
-        mode,
-        confirmation_token,
-        expected_name,
-        expected_cwd,
+        force,
+        "TERMINATE_DIRECTORY_PROCESS",
+        &target,
+        "terminate_directory_process_safe",
     )
 }
 
