@@ -2,6 +2,8 @@
 
 export function formatDisplayPath(path: string | undefined | null): string {
   if (!path) return "—";
+  const uncMatch = path.match(/^\\\\\?\\UNC\\(.*)$/i);
+  if (uncMatch) return `\\\\${uncMatch[1]}`;
   return path.replace(/^\\\\\?\\/, "");
 }
 
