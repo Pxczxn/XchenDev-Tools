@@ -25,6 +25,7 @@ import { formatDisplayPath } from "../lib/formatDisplay";
 import { labelErrorText, labelStatus } from "../lib/statusLabels";
 
 const ACTIVE_SESSION_STATES = new Set(["STARTING", "RUNNING", "STOPPING"]);
+const MAX_PENDING_TERMINAL_EVENTS = 64;
 
 type SessionsById = Record<string, LaunchSessionInfo>;
 type LogsBySessionId = Record<string, string[]>;
@@ -44,6 +45,20 @@ function indexLastSessions(sessions: LaunchSessionInfo[]): LastSessionByProfile 
   return Object.fromEntries(
     sessions.map((session) => [session.profile_id, session.launch_session_id]),
   );
+}
+
+function rememberPendingTerminalEvent(
+  cache: Record<string, TerminalEvent>,
+  sessionId: string,
+  event: TerminalEvent,
+) {
+  if (!(sessionId in cache)) {
+    const ids = Object.keys(cache);
+    if (ids.length >= MAX_PENDING_TERMINAL_EVENTS) {
+      delete cache[ids[0]];
+    }
+  }
+  cache[sessionId] = event;
 }
 
 function activeSessionForProfile(
@@ -134,10 +149,15 @@ export function ProjectsPage() {
 
       if (!p.final) return;
 
-      terminalEventsRef.current[p.launchSessionId] = {
+      const terminalEvent: TerminalEvent = {
         exitCode: p.exitCode,
         finalState: p.finalState,
       };
+      rememberPendingTerminalEvent(
+        terminalEventsRef.current,
+        p.launchSessionId,
+        terminalEvent,
+      );
 
       setSessionsById((prev) => {
         const current = prev[p.launchSessionId];
@@ -146,10 +166,7 @@ export function ProjectsPage() {
           ...prev,
           [p.launchSessionId]: {
             ...current,
-            state: terminalState(
-              terminalEventsRef.current[p.launchSessionId],
-              current.state,
-            ),
+            state: terminalState(terminalEvent, current.state),
             exit_code: p.exitCode ?? current.exit_code,
           },
         };
