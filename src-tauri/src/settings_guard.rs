@@ -133,11 +133,12 @@ mod tests {
 
     #[test]
     fn normalizes_lists_and_keys() {
-        let mut settings = AppSettings::default();
-        settings.extra_protected_process_names =
-            vec![" node.exe ".to_string(), "NODE.EXE".to_string()];
-        settings.disabled_runtime_kinds = vec![" JAVA ".to_string(), "java".to_string()];
-        settings.managed_service_kinds = vec![" Redis ".to_string()];
+        let mut settings = AppSettings {
+            extra_protected_process_names: vec![" node.exe ".to_string(), "NODE.EXE".to_string()],
+            disabled_runtime_kinds: vec![" JAVA ".to_string(), "java".to_string()],
+            managed_service_kinds: vec![" Redis ".to_string()],
+            ..Default::default()
+        };
         settings
             .detection_path_hints
             .insert(" NODE ".to_string(), " C:\\Tools\\node.exe ".to_string());
@@ -157,19 +158,25 @@ mod tests {
 
     #[test]
     fn rejects_invalid_ranges_and_unknown_kinds() {
-        let mut settings = AppSettings::default();
-        settings.log_retention_days = 0;
+        let settings = AppSettings {
+            log_retention_days: 0,
+            ..Default::default()
+        };
         assert!(normalize_settings(settings).is_err());
 
-        let mut settings = AppSettings::default();
-        settings.disabled_runtime_kinds = vec!["go".to_string()];
+        let settings = AppSettings {
+            disabled_runtime_kinds: vec!["go".to_string()],
+            ..Default::default()
+        };
         assert!(normalize_settings(settings).is_err());
     }
 
     #[test]
     fn rejects_process_paths_and_control_characters() {
-        let mut settings = AppSettings::default();
-        settings.extra_protected_process_names = vec!["C:\\Windows\\cmd.exe".to_string()];
+        let settings = AppSettings {
+            extra_protected_process_names: vec!["C:\\Windows\\cmd.exe".to_string()],
+            ..Default::default()
+        };
         assert!(normalize_settings(settings).is_err());
 
         let mut settings = AppSettings::default();

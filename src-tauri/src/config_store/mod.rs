@@ -479,7 +479,7 @@ fn read_config(path: &Path) -> Option<AppConfig> {
     Some(config)
 }
 
-fn load_or_default(path: &PathBuf) -> AppConfig {
+fn load_or_default(path: &Path) -> AppConfig {
     if let Some(config) = read_config(path) {
         return config;
     }
@@ -489,7 +489,7 @@ fn load_or_default(path: &PathBuf) -> AppConfig {
     AppConfig::default()
 }
 
-fn persist(path: &PathBuf, config: &AppConfig) -> Result<(), String> {
+fn persist(path: &Path, config: &AppConfig) -> Result<(), String> {
     let data = serde_json::to_vec_pretty(config).map_err(|e| e.to_string())?;
     let backup_current = read_config(path).is_some();
     atomic_write_with_backup(path, &data, backup_current)
@@ -565,8 +565,10 @@ mod tests {
         duplicate.projects.push(sample_project("same"));
         assert!(validate_import_config(&duplicate).is_err());
 
-        let mut future = AppConfig::default();
-        future.version = CURRENT_CONFIG_VERSION + 1;
+        let future = AppConfig {
+            version: CURRENT_CONFIG_VERSION + 1,
+            ..Default::default()
+        };
         assert!(validate_import_config(&future).is_err());
     }
 
@@ -655,8 +657,10 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("config.json");
 
-        let mut invalid_primary = AppConfig::default();
-        invalid_primary.version = CURRENT_CONFIG_VERSION + 1;
+        let invalid_primary = AppConfig {
+            version: CURRENT_CONFIG_VERSION + 1,
+            ..Default::default()
+        };
         write_config(&path, &invalid_primary);
 
         let mut invalid_backup = AppConfig::default();

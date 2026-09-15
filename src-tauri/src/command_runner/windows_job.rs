@@ -302,8 +302,10 @@ pub fn spawn_cmd_session(
     }
 
     let create_result = if inherited_handles.is_empty() {
-        let mut si = STARTUPINFOW::default();
-        si.cb = size_of::<STARTUPINFOW>() as u32;
+        let si = STARTUPINFOW {
+            cb: size_of::<STARTUPINFOW>() as u32,
+            ..Default::default()
+        };
         unsafe {
             CreateProcessW(
                 None,
