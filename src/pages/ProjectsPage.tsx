@@ -44,6 +44,10 @@ function activeSessionForProfile(
   );
 }
 
+function suggestedRole(candidate: TechnologyCandidate): "frontend" | "backend" {
+  return candidate.stack.toUpperCase() === "NODE" ? "frontend" : "backend";
+}
+
 export function ProjectsPage() {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [rootPath, setRootPath] = useState("");
@@ -145,7 +149,11 @@ export function ProjectsPage() {
   }
 
   async function onRemoveProject(project: ProjectInfo) {
-    if (!window.confirm(`仅移除项目记录，不删除磁盘文件。\n\n${project.name}`)) {
+    if (
+      !window.confirm(
+        `移除项目记录及其启动配置，不删除磁盘文件。\n运行中的项目需要先停止。\n\n${project.name}`,
+      )
+    ) {
       return;
     }
     try {
@@ -158,7 +166,7 @@ export function ProjectsPage() {
         setSelected(null);
       }
       await refreshProjects();
-      setMessage("项目记录已移除，磁盘文件未删除");
+      setMessage("项目记录与启动配置已移除，磁盘文件未删除");
     } catch (e) {
       setMessage(labelErrorText(String(e)));
     }
@@ -186,6 +194,7 @@ export function ProjectsPage() {
 
   function selectCandidate(c: TechnologyCandidate) {
     setSelected(c);
+    setRole(suggestedRole(c));
     setWorkdir(c.directory);
     setCommand(c.suggested_command ?? "");
   }
