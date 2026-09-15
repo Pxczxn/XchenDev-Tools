@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { PageHeader } from "../components/PageHeader";
-import { inspectPort, terminateProcess } from "../ipc/client";
+import {
+  inspectPort,
+  issueProcessTerminationConfirmation,
+  terminateProcess,
+} from "../ipc/client";
 import type { PortOccupancy } from "../ipc/types";
 import { formatDisplayPath } from "../lib/formatDisplay";
 import {
@@ -31,16 +35,21 @@ export function PortsPage() {
 
   async function onTerminate(row: PortOccupancy, force: boolean) {
     if (row.protection.is_protected) return;
-    const ok = window.confirm(
-      `确认${force ? "强制" : ""}终止 PID ${row.process.pid} (${row.process.name})？`,
-    );
-    if (!ok) return;
-    const token = crypto.randomUUID();
+    const mode = force ? "force" : "normal";
     try {
+      const confirmation = await issueProcessTerminationConfirmation({
+        pid: row.process.pid,
+        mode,
+        expectedName: row.process.name,
+        expectedCwd: row.process.working_directory,
+      });
+      const ok = window.confirm(`确认${force ? "强制" : ""}终止？\n${confirmation.binding_summary}`);
+      if (!ok) return;
+
       const result = await terminateProcess({
         pid: row.process.pid,
-        mode: force ? "force" : "normal",
-        confirmationToken: token,
+        mode,
+        confirmationToken: confirmation.confirmation_token,
         expectedName: row.process.name,
         expectedCwd: row.process.working_directory,
       });
