@@ -32,25 +32,31 @@ export function PortsPage() {
     setMessage(null);
   }
 
-  async function onQuery() {
+  async function refreshRows(clearMessage: boolean): Promise<boolean> {
     const parsedPort = parsePort(port);
     if (parsedPort === null) {
       setRows([]);
       setMessage("端口必须是 1~65535 的整数");
-      return;
+      return false;
     }
 
     setLoading(true);
-    setMessage(null);
+    if (clearMessage) setMessage(null);
     try {
       const data = await inspectPort("both", parsedPort);
       setRows(data);
+      return true;
     } catch (e) {
       setMessage(labelErrorText(String(e)));
       setRows([]);
+      return false;
     } finally {
       setLoading(false);
     }
+  }
+
+  async function onQuery() {
+    await refreshRows(true);
   }
 
   async function onTerminate(row: PortOccupancy, force: boolean) {
@@ -73,14 +79,14 @@ export function PortsPage() {
         expectedName: row.process.name,
         expectedCwd: row.process.working_directory,
       });
-      setMessage(
-        formatOperationMessage(
-          result.status,
-          result.message,
-          result.reason_code,
-        ),
+      const operationMessage = formatOperationMessage(
+        result.status,
+        result.message,
+        result.reason_code,
       );
-      await onQuery();
+      if (await refreshRows(false)) {
+        setMessage(operationMessage);
+      }
     } catch (e) {
       setMessage(labelErrorText(String(e)));
     }
