@@ -40,6 +40,7 @@ export interface PortOccupancy {
     command_line?: string;
   };
   protection: { is_protected: boolean; reason?: string };
+  snapshot_digest: string;
 }
 
 export interface ProcessTerminationConfirmation {
