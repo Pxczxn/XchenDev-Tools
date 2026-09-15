@@ -1,16 +1,22 @@
 use crate::app_state::AppState;
 use crate::audit_log;
-use crate::domain::{OperationResult, OperationStatus, WindowsServiceInfo};
+use crate::domain::{
+    OperationResult, OperationStatus, WindowsServiceInfo, WindowsServiceStatus,
+};
 use crate::service_manager;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
 use tauri::State;
 use uuid::Uuid;
 
 const SERVICE_CONFIRMATION_TTL_SECS: i64 = 60;
+const SERVICE_STATE_TIMEOUT: Duration = Duration::from_secs(20);
+const SERVICE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Clone)]
 struct PendingServiceConfirmation {
@@ -60,6 +66,65 @@ fn binding_digest(service: &WindowsServiceInfo, action: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+fn wait_for_status(
+    state: &AppState,
+    service_name: &str,
+    target: WindowsServiceStatus,
+) -> Result<(), String> {
+    let started = Instant::now();
+    loop {
+        let service = find_managed_service(state, service_name)?;
+        if service.status == target {
+            return Ok(());
+        }
+        if started.elapsed() >= SERVICE_STATE_TIMEOUT {
+            return Err(format!(
+                "SERVICE_CONTROL_TIMEOUT:等待服务进入 {:?} 超时，当前 {:?}",
+                target, service.status
+            ));
+        }
+        thread::sleep(SERVICE_POLL_INTERVAL);
+    }
+}
+
+fn execute_service_action(
+    state: &AppState,
+    service: &WindowsServiceInfo,
+    action: &str,
+) -> Result<(), String> {
+    match action.to_lowercase().as_str() {
+        "start" => {
+            if service.status == WindowsServiceStatus::Running {
+                return Ok(());
+            }
+            if service.status != WindowsServiceStatus::Starting {
+                service_manager::control_service(&service.service_name, "start")?;
+            }
+            wait_for_status(state, &service.service_name, WindowsServiceStatus::Running)
+        }
+        "stop" => {
+            if service.status == WindowsServiceStatus::Stopped {
+                return Ok(());
+            }
+            if service.status != WindowsServiceStatus::Stopping {
+                service_manager::control_service(&service.service_name, "stop")?;
+            }
+            wait_for_status(state, &service.service_name, WindowsServiceStatus::Stopped)
+        }
+        "restart" => {
+            if service.status != WindowsServiceStatus::Stopped {
+                if service.status != WindowsServiceStatus::Stopping {
+                    service_manager::control_service(&service.service_name, "stop")?;
+                }
+                wait_for_status(state, &service.service_name, WindowsServiceStatus::Stopped)?;
+            }
+            service_manager::control_service(&service.service_name, "start")?;
+            wait_for_status(state, &service.service_name, WindowsServiceStatus::Running)
+        }
+        _ => Err("SERVICE_ACTION_INVALID:不支持的操作".to_string()),
+    }
+}
+
 #[tauri::command]
 pub fn issue_service_control_confirmation_safe(
     state: State<'_, AppState>,
@@ -91,7 +156,7 @@ pub fn issue_service_control_confirmation_safe(
     Ok(ServiceControlConfirmation {
         confirmation_token: token,
         binding_summary: format!("{} {} ({:?})", action, service.display_name, service.status),
-        expires_at: (Utc::now() + Duration::seconds(SERVICE_CONFIRMATION_TTL_SECS)).to_rfc3339(),
+        expires_at: (Utc::now() + ChronoDuration::seconds(SERVICE_CONFIRMATION_TTL_SECS)).to_rfc3339(),
     })
 }
 
@@ -128,7 +193,7 @@ pub fn control_windows_service_safe(
     }
 
     let target = format!("service:{}:{}", service_name, action);
-    match service_manager::control_service(&service_name, &action) {
+    match execute_service_action(&state, &service, &action) {
         Ok(()) => {
             audit_log::record_action(
                 &state.config,
@@ -159,7 +224,7 @@ pub fn control_windows_service_safe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{ServiceKind, WindowsServiceStatus};
+    use crate::domain::ServiceKind;
 
     fn service(status: WindowsServiceStatus) -> WindowsServiceInfo {
         WindowsServiceInfo {
