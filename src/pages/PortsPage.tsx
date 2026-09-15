@@ -12,18 +12,38 @@ import {
   labelErrorText,
 } from "../lib/statusLabels";
 
+function parsePort(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) return null;
+  return parsed;
+}
+
 export function PortsPage() {
   const [port, setPort] = useState("3000");
   const [rows, setRows] = useState<PortOccupancy[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  function changePort(value: string) {
+    setPort(value);
+    setRows([]);
+    setMessage(null);
+  }
+
   async function onQuery() {
+    const parsedPort = parsePort(port);
+    if (parsedPort === null) {
+      setRows([]);
+      setMessage("端口必须是 1~65535 的整数");
+      return;
+    }
+
     setLoading(true);
     setMessage(null);
     try {
-      const p = Number(port);
-      const data = await inspectPort("both", p);
+      const data = await inspectPort("both", parsedPort);
       setRows(data);
     } catch (e) {
       setMessage(labelErrorText(String(e)));
@@ -76,8 +96,9 @@ export function PortsPage() {
         <input
           className="input-port"
           value={port}
-          onChange={(e) => setPort(e.target.value)}
+          onChange={(e) => changePort(e.target.value)}
           placeholder="端口"
+          inputMode="numeric"
         />
         <button type="button" onClick={onQuery} disabled={loading}>
           {loading ? "查询中…" : "查询"}
