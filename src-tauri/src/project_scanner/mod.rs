@@ -87,7 +87,13 @@ fn scan_dir(
             continue;
         }
         let candidate = build_candidate(dir, root, &evidence, *stack, file_name)?;
-        out.push(candidate);
+        let duplicate_stack = out.iter().any(|existing| {
+            existing.directory.eq_ignore_ascii_case(&candidate.directory)
+                && existing.stack == candidate.stack
+        });
+        if !duplicate_stack {
+            out.push(candidate);
+        }
     }
     Ok(())
 }
@@ -156,16 +162,13 @@ fn build_candidate(
             let runner = if mvnw.is_file() { ".\\mvnw.cmd" } else { "mvn" };
 
             let (status, suggested_command) = if packaging_pom {
-                // 聚合/父 POM 本身通常不可直接运行。继续向下扫描真实启动模块。
                 (CandidateStatus::EvidenceOnly, None)
             } else if is_spring_boot_module {
-                // 插件证据足以给出建议，但多模块依赖是否可从该目录直接解析仍需用户确认。
                 (
                     CandidateStatus::NeedsConfirmation,
                     Some(format!("{} spring-boot:run", runner)),
                 )
             } else {
-                // 有 Maven 证据，但没有足够证据证明它是可启动的 Spring Boot 模块。
                 (CandidateStatus::NeedsConfirmation, None)
             };
 
@@ -354,5 +357,18 @@ mod tests {
         let candidate = result.candidates.first().expect("candidate");
         assert_eq!(candidate.status, CandidateStatus::NeedsConfirmation);
         assert_eq!(candidate.suggested_command.as_deref(), Some("mvn spring-boot:run"));
+    }
+
+    #[test]
+    fn multiple_evidence_files_for_same_stack_are_deduplicated() {
+        let root = tempdir().expect("tempdir");
+        fs::write(root.path().join("requirements.txt"), "fastapi\n").expect("requirements");
+        fs::write(root.path().join("pyproject.toml"), "[project]\nname='demo'\n").expect("pyproject");
+
+        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].stack, TechnologyStack::Python);
+        assert_eq!(result.candidates[0].status, CandidateStatus::EvidenceOnly);
+        assert!(result.candidates[0].conflict_group.is_none());
     }
 }
