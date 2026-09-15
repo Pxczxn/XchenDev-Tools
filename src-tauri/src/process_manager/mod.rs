@@ -91,7 +91,7 @@ pub fn find_process_summary(pid: u32) -> Option<ProcessSummary> {
     })
 }
 
-pub fn list_all_summaries() -> Vec<ProcessSummary> {
+pub fn list_all_summaries_with_start_time() -> Vec<(ProcessSummary, u64)> {
     let mut system = System::new();
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
@@ -105,13 +105,23 @@ pub fn list_all_summaries() -> Vec<ProcessSummary> {
             let name = process.name().to_string_lossy().to_string();
             let cwd = process.cwd().map(|p| p.to_string_lossy().to_string());
             let cmd = format_cmd(process.cmd());
-            ProcessSummary {
-                pid: pid.as_u32(),
-                name,
-                working_directory: cwd,
-                command_line: if cmd.is_empty() { None } else { Some(cmd) },
-            }
+            (
+                ProcessSummary {
+                    pid: pid.as_u32(),
+                    name,
+                    working_directory: cwd,
+                    command_line: if cmd.is_empty() { None } else { Some(cmd) },
+                },
+                process.start_time(),
+            )
         })
+        .collect()
+}
+
+pub fn list_all_summaries() -> Vec<ProcessSummary> {
+    list_all_summaries_with_start_time()
+        .into_iter()
+        .map(|(summary, _)| summary)
         .collect()
 }
 
@@ -163,14 +173,16 @@ pub fn terminate_pid_with_extra(
     }
 }
 
+pub fn digest_for_snapshot(pid: u32, name: &str, cwd: Option<&str>, start_time: u64) -> String {
+    let identity_name = format!("{}|start={}", name, start_time);
+    snapshot_digest(pid, &identity_name, cwd)
+}
+
 pub fn digest_for(pid: u32, name: &str, cwd: Option<&str>) -> String {
     // Bind directory-operation snapshots to process creation identity as well as PID/name/cwd.
     // If Windows reuses the PID before the user confirms termination, the recomputed digest changes.
-    let start_time = process_start_time_secs(pid)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "missing".to_string());
-    let identity_name = format!("{}|start={}", name, start_time);
-    snapshot_digest(pid, &identity_name, cwd)
+    let start_time = process_start_time_secs(pid).unwrap_or(0);
+    digest_for_snapshot(pid, name, cwd, start_time)
 }
 
 pub fn protection(summary: &ProcessSummary) -> ProtectionDecision {
@@ -193,5 +205,12 @@ mod tests {
     #[test]
     fn pin_missing_process_identity_fails() {
         assert!(pin_process_identity(u32::MAX).is_err());
+    }
+
+    #[test]
+    fn snapshot_digest_changes_with_process_start_time() {
+        let first = digest_for_snapshot(42, "node.exe", Some(r"C:\demo"), 100);
+        let second = digest_for_snapshot(42, "node.exe", Some(r"C:\demo"), 101);
+        assert_ne!(first, second);
     }
 }
