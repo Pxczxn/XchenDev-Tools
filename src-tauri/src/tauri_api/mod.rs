@@ -1,5 +1,6 @@
 mod commands;
 mod config_import;
+mod environment_settings;
 mod history;
 mod launch_confirmation;
 mod launch_profiles;
@@ -11,6 +12,7 @@ mod settings;
 
 pub use commands::*;
 pub use config_import::*;
+pub use environment_settings::*;
 pub use history::*;
 pub use launch_confirmation::*;
 pub use launch_profiles::*;
