@@ -76,6 +76,9 @@ const STATUS_LABELS: Record<string, string> = {
   PROCESS_NOT_FOUND: "进程不存在",
   PROCESS_QUERY_FAILED: "进程查询失败",
   PROCESS_SNAPSHOT_MISMATCH: "进程快照不匹配",
+  PROCESS_CONFIRMATION_ISSUE_FAILED: "进程确认签发失败",
+  PROCESS_CONFIRMATION_REQUIRED: "需要重新确认目标进程",
+  TERMINATE_MODE_INVALID: "终止模式无效",
   TERMINATE_DENIED: "终止被拒绝",
   TERMINATE_FAILED: "终止失败",
   DIRECTORY_INVALID: "目录无效",
@@ -100,9 +103,13 @@ const STATUS_LABELS: Record<string, string> = {
   LAUNCH_SESSION_NOT_FOUND: "会话不存在",
   LAUNCH_PROCESS_IDENTITY_MISMATCH: "启动进程身份已变化",
   LAUNCH_STOP_FAILED: "停止失败",
+  SERVICE_NOT_FOUND: "服务不存在或不在管理范围",
   SERVICE_QUERY_FAILED: "服务查询失败",
+  SERVICE_CONFIRMATION_ISSUE_FAILED: "服务确认签发失败",
+  SERVICE_CONFIRMATION_REQUIRED: "需要重新确认服务操作",
   SERVICE_CONTROL_FAILED: "服务控制失败",
   SERVICE_CONTROL_DENIED: "服务控制被拒绝",
+  SERVICE_CONTROL_TIMEOUT: "等待服务状态变化超时",
   SERVICE_ACTION_INVALID: "服务操作无效",
 };
 
