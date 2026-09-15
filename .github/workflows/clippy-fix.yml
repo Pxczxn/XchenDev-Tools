@@ -1,0 +1,39 @@
+name: One-shot Clippy Fix
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/clippy-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Apply machine-fixable Clippy suggestions
+        continue-on-error: true
+        run: cargo clippy --fix --allow-dirty --allow-staged --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust format
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml
+
+      - name: Commit fixes
+        shell: pwsh
+        run: |
+          git config user.name "XchenDev"
+          git config user.email "Pxczxn@163.com"
+          git add src-tauri
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "【clippy】自动应用可修复建议"
+            git push
+          } else {
+            Write-Host "No machine-fixable changes"
+          }
