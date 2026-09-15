@@ -96,14 +96,8 @@ mod tests {
             .with_timezone(&Utc);
         let mut config = AppConfig::default();
         config.settings.log_retention_days = 7;
-        config.audit_events = vec![
-            audit("2026-09-01T00:00:00Z"),
-            audit("2026-09-14T00:00:00Z"),
-        ];
-        config.recent_errors = vec![
-            error("2026-08-01T00:00:00Z"),
-            error("2026-09-15T07:00:00Z"),
-        ];
+        config.audit_events = vec![audit("2026-09-01T00:00:00Z"), audit("2026-09-14T00:00:00Z")];
+        config.recent_errors = vec![error("2026-08-01T00:00:00Z"), error("2026-09-15T07:00:00Z")];
 
         prune_config_history(&mut config, now);
         assert_eq!(config.audit_events.len(), 1);

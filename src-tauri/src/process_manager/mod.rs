@@ -8,8 +8,8 @@ fn format_cmd(parts: &[OsString]) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
-use crate::security_guard::{protection_for_process, snapshot_digest};
 use crate::security_guard;
+use crate::security_guard::{protection_for_process, snapshot_digest};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 #[cfg(windows)]
@@ -30,8 +30,8 @@ pub struct ProcessIdentityGuard;
 /// Keep the current process object alive while a PID-based operation is in flight.
 /// On Windows, a PID cannot be reused until all handles to the terminated process are closed.
 pub fn pin_process_identity(pid: u32) -> Result<ProcessIdentityGuard, String> {
-    let start_time_before = process_start_time_secs(pid)
-        .ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
+    let start_time_before =
+        process_start_time_secs(pid).ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
 
     #[cfg(windows)]
     {
@@ -130,7 +130,8 @@ pub fn verify_process_snapshot(
     expected_name: &str,
     expected_cwd: Option<&str>,
 ) -> Result<(), String> {
-    let summary = find_process_summary(pid).ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
+    let summary =
+        find_process_summary(pid).ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
     if summary.name.to_lowercase() != expected_name.to_lowercase() {
         return Err("PROCESS_SNAPSHOT_MISMATCH:进程名不匹配".to_string());
     }
@@ -152,7 +153,8 @@ pub fn terminate_pid_with_extra(
     force: bool,
     extra_protected: &[String],
 ) -> Result<(), String> {
-    let summary = find_process_summary(pid).ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
+    let summary =
+        find_process_summary(pid).ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
     let protection = security_guard::protection_for_process_with_extra(&summary, extra_protected);
     if protection.is_protected {
         return Err("PROCESS_PROTECTED:目标进程受保护".to_string());

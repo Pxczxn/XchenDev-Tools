@@ -21,22 +21,15 @@ pub fn issue_launch_confirmation_safe(
     // instead of binding a token to raw stored strings.
     let command = profile.command.trim();
     security_guard::validate_command_policy(command)?;
-    let canonical_workdir = validated_workdir_for_project(
-        &state,
-        &profile.project_id,
-        &profile.working_directory,
-    )?;
+    let canonical_workdir =
+        validated_workdir_for_project(&state, &profile.project_id, &profile.working_directory)?;
 
     let role = match profile.process_role {
         ProcessRole::Frontend => "frontend",
         ProcessRole::Backend => "backend",
     };
-    let (token, summary) = state.issue_confirmation(
-        &profile.profile_id,
-        command,
-        &canonical_workdir,
-        role,
-    )?;
+    let (token, summary) =
+        state.issue_confirmation(&profile.profile_id, command, &canonical_workdir, role)?;
     Ok(LaunchConfirmation {
         confirmation_token: token,
         profile_id: profile.profile_id,

@@ -1,8 +1,8 @@
 pub mod app_state;
 mod audit_log;
 mod command_runner;
-mod config_transaction;
 pub mod config_store;
+mod config_transaction;
 pub mod domain;
 mod environment_detector;
 pub mod error;
@@ -80,9 +80,9 @@ mod ipc_contract_tests {
             let call_args = if let Some(rest) = trimmed.strip_prefix('(') {
                 Some(rest)
             } else if let Some(generic) = trimmed.strip_prefix('<') {
-                generic
-                    .find('>')
-                    .and_then(|generic_end| generic[generic_end + 1..].trim_start().strip_prefix('('))
+                generic.find('>').and_then(|generic_end| {
+                    generic[generic_end + 1..].trim_start().strip_prefix('(')
+                })
             } else {
                 None
             };
@@ -131,8 +131,14 @@ mod ipc_contract_tests {
         let invoked = quoted_invoke_commands(client);
         let registered = registered_handler_commands(backend);
 
-        assert!(invoked.contains("health_check"), "invoke parser must capture generic calls");
-        assert!(invoked.len() >= 20, "invoke parser captured suspiciously few commands: {invoked:?}");
+        assert!(
+            invoked.contains("health_check"),
+            "invoke parser must capture generic calls"
+        );
+        assert!(
+            invoked.len() >= 20,
+            "invoke parser captured suspiciously few commands: {invoked:?}"
+        );
 
         let missing: Vec<_> = invoked.difference(&registered).cloned().collect();
         assert!(

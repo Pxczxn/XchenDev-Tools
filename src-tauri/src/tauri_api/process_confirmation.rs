@@ -107,20 +107,14 @@ pub fn issue_process_termination_confirmation_safe(
             _ => return Err("PROCESS_SNAPSHOT_MISMATCH:工作目录不匹配".to_string()),
         }
     }
-    let protection = process_manager::protection_with_extra(
-        &summary,
-        &state.config.extra_protected_names(),
-    );
+    let protection =
+        process_manager::protection_with_extra(&summary, &state.config.extra_protected_names());
     if protection.is_protected {
         return Err("PROCESS_PROTECTED:目标进程受保护".to_string());
     }
 
-    let (token, binding_summary) = state.issue_process_confirmation(
-        pid,
-        &expected_name,
-        expected_cwd.as_deref(),
-        &mode,
-    )?;
+    let (token, binding_summary) =
+        state.issue_process_confirmation(pid, &expected_name, expected_cwd.as_deref(), &mode)?;
     Ok(ProcessTerminationConfirmation {
         confirmation_token: token,
         binding_summary,
@@ -194,11 +188,8 @@ pub fn terminate_port_process_safe(
 
     let current = process_manager::find_process_summary(pid)
         .ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
-    let current_digest = process_manager::digest_for(
-        pid,
-        &current.name,
-        current.working_directory.as_deref(),
-    );
+    let current_digest =
+        process_manager::digest_for(pid, &current.name, current.working_directory.as_deref());
     if current_digest != snapshot_digest {
         return Ok(record_rejected_snapshot(
             &state,
@@ -249,11 +240,8 @@ pub fn terminate_directory_process_safe(
             ));
         }
     };
-    let current_digest = process_manager::digest_for(
-        pid,
-        &current.name,
-        current.working_directory.as_deref(),
-    );
+    let current_digest =
+        process_manager::digest_for(pid, &current.name, current.working_directory.as_deref());
     if current_digest != snapshot_digest {
         return Ok(OperationResult::rejected(
             "PROCESS_SNAPSHOT_MISMATCH",

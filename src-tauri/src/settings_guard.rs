@@ -26,7 +26,11 @@ fn clean_text(value: &str, field: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-fn normalize_kind_list(values: &[String], allowed: &[&str], field: &str) -> Result<Vec<String>, String> {
+fn normalize_kind_list(
+    values: &[String],
+    allowed: &[&str],
+    field: &str,
+) -> Result<Vec<String>, String> {
     let allowed: HashSet<&str> = allowed.iter().copied().collect();
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -130,10 +134,8 @@ mod tests {
     #[test]
     fn normalizes_lists_and_keys() {
         let mut settings = AppSettings::default();
-        settings.extra_protected_process_names = vec![
-            " node.exe ".to_string(),
-            "NODE.EXE".to_string(),
-        ];
+        settings.extra_protected_process_names =
+            vec![" node.exe ".to_string(), "NODE.EXE".to_string()];
         settings.disabled_runtime_kinds = vec![" JAVA ".to_string(), "java".to_string()];
         settings.managed_service_kinds = vec![" Redis ".to_string()];
         settings
@@ -145,7 +147,10 @@ mod tests {
         assert_eq!(normalized.disabled_runtime_kinds, vec!["java"]);
         assert_eq!(normalized.managed_service_kinds, vec!["redis"]);
         assert_eq!(
-            normalized.detection_path_hints.get("node").map(String::as_str),
+            normalized
+                .detection_path_hints
+                .get("node")
+                .map(String::as_str),
             Some("C:\\Tools\\node.exe")
         );
     }

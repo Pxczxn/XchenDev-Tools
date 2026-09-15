@@ -37,7 +37,13 @@ fn build_runtime_items(state: &AppState, sessions: Vec<LaunchSessionInfo>) -> Ve
     for session in active_sessions {
         let profile = state.config.get_profile(&session.profile_id);
         let name = profile
-            .map(|profile| format!("{} ({})", profile.command, role_label(&profile.process_role)))
+            .map(|profile| {
+                format!(
+                    "{} ({})",
+                    profile.command,
+                    role_label(&profile.process_role)
+                )
+            })
             .unwrap_or_else(|| session.profile_id.clone());
         items.push(RuntimeItem {
             dto_version: DTO_VERSION,
@@ -55,7 +61,11 @@ fn build_runtime_items(state: &AppState, sessions: Vec<LaunchSessionInfo>) -> Ve
         items.push(RuntimeItem {
             dto_version: DTO_VERSION,
             id: profile.profile_id.clone(),
-            name: format!("{} ({})", profile.command, role_label(&profile.process_role)),
+            name: format!(
+                "{} ({})",
+                profile.command,
+                role_label(&profile.process_role)
+            ),
             runtime_mode: RuntimeMode::CommandProcess,
             state: RuntimeItemState::Configured,
         });
@@ -70,7 +80,11 @@ fn build_runtime_items(state: &AppState, sessions: Vec<LaunchSessionInfo>) -> Ve
             items.push(RuntimeItem {
                 dto_version: DTO_VERSION,
                 id: format!("service:{}", service.service_name),
-                name: format!("{} [{}]", service.display_name, service_kind_label(&service.kind)),
+                name: format!(
+                    "{} [{}]",
+                    service.display_name,
+                    service_kind_label(&service.kind)
+                ),
                 runtime_mode: RuntimeMode::WindowsService,
                 state: service_manager::service_status_to_runtime_state(&service.status),
             });

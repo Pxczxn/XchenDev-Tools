@@ -65,8 +65,15 @@ impl ConfigStore {
         self.path.clone()
     }
 
-    pub fn save_manual_override(&self, runtime_kind: &str, executable_path: &str) -> Result<(), String> {
-        let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+    pub fn save_manual_override(
+        &self,
+        runtime_kind: &str,
+        executable_path: &str,
+    ) -> Result<(), String> {
+        let mut cfg = self
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned".to_string())?;
         cfg.manual_overrides
             .insert(runtime_kind.to_string(), executable_path.to_string());
         persist(&self.path, &cfg)?;
@@ -127,13 +134,17 @@ impl ConfigStore {
         projects
     }
 
-    pub fn upsert_project(&self, root_path: &str, name: Option<&str>) -> Result<ProjectInfo, String> {
+    pub fn upsert_project(
+        &self,
+        root_path: &str,
+        name: Option<&str>,
+    ) -> Result<ProjectInfo, String> {
         let root = PathBuf::from(root_path);
         if !root.is_dir() {
             return Err("PROJECT_ROOT_INVALID:项目目录不存在".to_string());
         }
-        let canonical = fs::canonicalize(&root)
-            .map_err(|e| format!("PROJECT_ROOT_INVALID:{}", e))?;
+        let canonical =
+            fs::canonicalize(&root).map_err(|e| format!("PROJECT_ROOT_INVALID:{}", e))?;
         let normalized = canonical.to_string_lossy().to_string();
         let project_id = project_id_from_path(&normalized);
         let now = Utc::now().to_rfc3339();
@@ -149,7 +160,10 @@ impl ConfigStore {
                     .unwrap_or_else(|| normalized.clone())
             });
 
-        let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+        let mut cfg = self
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned".to_string())?;
         let project = if let Some(existing) = cfg
             .projects
             .iter_mut()
@@ -175,7 +189,10 @@ impl ConfigStore {
     }
 
     pub fn remove_project(&self, project_id: &str) -> Result<bool, String> {
-        let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+        let mut cfg = self
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned".to_string())?;
         let before = cfg.projects.len();
         cfg.projects
             .retain(|project| project.project_id != project_id);
@@ -189,7 +206,10 @@ impl ConfigStore {
     }
 
     pub fn upsert_launch_profile(&self, profile: LaunchProfile) -> Result<(), String> {
-        let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+        let mut cfg = self
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned".to_string())?;
         if let Some(existing) = cfg
             .launch_profiles
             .iter_mut()
@@ -204,7 +224,10 @@ impl ConfigStore {
     }
 
     pub fn remove_launch_profile(&self, profile_id: &str) -> Result<bool, String> {
-        let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+        let mut cfg = self
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned".to_string())?;
         let before = cfg.launch_profiles.len();
         cfg.launch_profiles
             .retain(|profile| profile.profile_id != profile_id);
@@ -229,33 +252,40 @@ impl ConfigStore {
     }
 
     pub fn get_profile(&self, profile_id: &str) -> Option<LaunchProfile> {
-        self.config
-            .lock()
-            .ok()
-            .and_then(|c| {
-                c.launch_profiles
-                    .iter()
-                    .find(|p| p.profile_id == profile_id)
-                    .cloned()
-            })
+        self.config.lock().ok().and_then(|c| {
+            c.launch_profiles
+                .iter()
+                .find(|p| p.profile_id == profile_id)
+                .cloned()
+        })
     }
 
     pub fn add_profile(&self, profile: LaunchProfile) -> Result<(), String> {
-        let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+        let mut cfg = self
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned".to_string())?;
         cfg.launch_profiles.push(profile);
         persist(&self.path, &cfg)?;
         Ok(())
     }
 
     pub fn export_json(&self) -> Result<String, String> {
-        let cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+        let cfg = self
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned".to_string())?;
         serde_json::to_string_pretty(&*cfg).map_err(|e| e.to_string())
     }
 
     pub fn import_json(&self, data: &str) -> Result<(), String> {
-        let parsed: AppConfig = serde_json::from_str(data).map_err(|e| format!("PROFILE_INVALID:{}", e))?;
+        let parsed: AppConfig =
+            serde_json::from_str(data).map_err(|e| format!("PROFILE_INVALID:{}", e))?;
         validate_import_config(&parsed)?;
-        let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+        let mut cfg = self
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned".to_string())?;
         *cfg = parsed;
         persist(&self.path, &cfg)?;
         Ok(())
@@ -288,7 +318,10 @@ impl ConfigStore {
     }
 
     pub fn save_settings(&self, settings: AppSettings) -> Result<(), String> {
-        let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+        let mut cfg = self
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned".to_string())?;
         cfg.settings = settings;
         persist(&self.path, &cfg)?;
         Ok(())
@@ -414,7 +447,9 @@ fn app_base_dir() -> PathBuf {
 fn project_root_from_exe(exe: &Path) -> Option<PathBuf> {
     let mut dir = exe.parent();
     while let Some(d) = dir {
-        if d.file_name().is_some_and(|n| n == "debug" || n == "release") {
+        if d.file_name()
+            .is_some_and(|n| n == "debug" || n == "release")
+        {
             if let Some(target) = d.parent() {
                 if target.file_name().is_some_and(|n| n == "target") {
                     if let Some(src_tauri) = target.parent() {
@@ -502,14 +537,18 @@ mod tests {
     fn import_integrity_accepts_valid_project_profile_graph() {
         let mut config = AppConfig::default();
         config.projects.push(sample_project("project-a"));
-        config.launch_profiles.push(sample_profile("profile-a", "project-a"));
+        config
+            .launch_profiles
+            .push(sample_profile("profile-a", "project-a"));
         assert!(validate_import_config(&config).is_ok());
     }
 
     #[test]
     fn import_integrity_rejects_orphan_launch_profile() {
         let mut config = AppConfig::default();
-        config.launch_profiles.push(sample_profile("profile-a", "missing-project"));
+        config
+            .launch_profiles
+            .push(sample_profile("profile-a", "missing-project"));
         assert!(validate_import_config(&config).is_err());
     }
 
@@ -530,10 +569,9 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("config.json");
         let mut backup = AppConfig::default();
-        backup.manual_overrides.insert(
-            "node".to_string(),
-            "C:\\Tools\\node.exe".to_string(),
-        );
+        backup
+            .manual_overrides
+            .insert("node".to_string(), "C:\\Tools\\node.exe".to_string());
         fs::write(&path, "{broken-json").expect("corrupt primary");
         write_config(&backup_path(&path), &backup);
 
@@ -556,10 +594,9 @@ mod tests {
         write_config(&path, &invalid_primary);
 
         let mut backup = AppConfig::default();
-        backup.manual_overrides.insert(
-            "java".to_string(),
-            "C:\\Tools\\java.exe".to_string(),
-        );
+        backup
+            .manual_overrides
+            .insert("java".to_string(), "C:\\Tools\\java.exe".to_string());
         write_config(&backup_path(&path), &backup);
 
         let store = open_at(path);
@@ -579,10 +616,9 @@ mod tests {
         write_config(&path, &invalid_primary);
 
         let mut backup = AppConfig::default();
-        backup.manual_overrides.insert(
-            "node".to_string(),
-            "C:\\Backup\\node.exe".to_string(),
-        );
+        backup
+            .manual_overrides
+            .insert("node".to_string(), "C:\\Backup\\node.exe".to_string());
         write_config(&backup_path(&path), &backup);
 
         let store = open_at(path);
@@ -636,17 +672,15 @@ mod tests {
         let path = dir.path().join("config.json");
 
         let mut primary = AppConfig::default();
-        primary.manual_overrides.insert(
-            "node".to_string(),
-            "C:\\Primary\\node.exe".to_string(),
-        );
+        primary
+            .manual_overrides
+            .insert("node".to_string(), "C:\\Primary\\node.exe".to_string());
         write_config(&path, &primary);
 
         let mut backup = AppConfig::default();
-        backup.manual_overrides.insert(
-            "node".to_string(),
-            "C:\\Backup\\node.exe".to_string(),
-        );
+        backup
+            .manual_overrides
+            .insert("node".to_string(), "C:\\Backup\\node.exe".to_string());
         write_config(&backup_path(&path), &backup);
 
         let store = open_at(path);

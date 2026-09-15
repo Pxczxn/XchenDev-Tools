@@ -86,9 +86,11 @@ pub fn list_managed_services(
     }
 
     result.sort_by(|a, b| {
-        kind_sort_key(&a.kind)
-            .cmp(&kind_sort_key(&b.kind))
-            .then(a.service_name.to_lowercase().cmp(&b.service_name.to_lowercase()))
+        kind_sort_key(&a.kind).cmp(&kind_sort_key(&b.kind)).then(
+            a.service_name
+                .to_lowercase()
+                .cmp(&b.service_name.to_lowercase()),
+        )
     });
     Ok(result)
 }
@@ -184,7 +186,8 @@ fn map_row(row: PsServiceRow) -> WindowsServiceInfo {
 fn classify_service(name: &str, display: &str) -> ServiceKind {
     let n = name.to_lowercase();
     let d = display.to_lowercase();
-    if n.contains("mysql") || n.contains("mariadb") || d.contains("mysql") || d.contains("mariadb") {
+    if n.contains("mysql") || n.contains("mariadb") || d.contains("mysql") || d.contains("mariadb")
+    {
         return ServiceKind::Mysql;
     }
     if n.contains("redis") || d.contains("redis") {
@@ -265,7 +268,9 @@ mod tests {
     }
 }
 
-pub fn service_status_to_runtime_state(status: &WindowsServiceStatus) -> crate::domain::RuntimeItemState {
+pub fn service_status_to_runtime_state(
+    status: &WindowsServiceStatus,
+) -> crate::domain::RuntimeItemState {
     use crate::domain::RuntimeItemState;
     match status {
         WindowsServiceStatus::Running => RuntimeItemState::Running,

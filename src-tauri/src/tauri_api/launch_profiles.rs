@@ -21,8 +21,8 @@ fn lock_launch_lifecycle() -> Result<std::sync::MutexGuard<'static, ()>, String>
 }
 
 fn canonical_directory(path: &str, error_code: &str) -> Result<PathBuf, String> {
-    let canonical = std::fs::canonicalize(Path::new(path))
-        .map_err(|_| format!("{}:目录不存在", error_code))?;
+    let canonical =
+        std::fs::canonicalize(Path::new(path)).map_err(|_| format!("{}:目录不存在", error_code))?;
     if !canonical.is_dir() {
         return Err(format!("{}:路径不是目录", error_code));
     }
@@ -86,8 +86,7 @@ pub fn save_launch_profile_safe(
 
     let command = command.trim().to_string();
     security_guard::validate_command_policy(&command)?;
-    let working_directory =
-        validated_workdir_for_project(&state, &project_id, &working_directory)?;
+    let working_directory = validated_workdir_for_project(&state, &project_id, &working_directory)?;
     let source_candidate_id = normalize_candidate_id(source_candidate_id);
 
     let role = match process_role.to_lowercase().as_str() {
@@ -193,11 +192,8 @@ pub fn start_launch_profile_safe(
     // Imported or manually edited config is untrusted at the execution boundary.
     let command = profile.command.trim();
     security_guard::validate_command_policy(command)?;
-    let canonical_workdir = validated_workdir_for_project(
-        &state,
-        &profile.project_id,
-        &profile.working_directory,
-    )?;
+    let canonical_workdir =
+        validated_workdir_for_project(&state, &profile.project_id, &profile.working_directory)?;
 
     let role = match profile.process_role {
         ProcessRole::Frontend => "frontend",
@@ -210,12 +206,9 @@ pub fn start_launch_profile_safe(
         &canonical_workdir,
         role,
     )?;
-    state.command_runner.start(
-        &app,
-        &profile.profile_id,
-        &canonical_workdir,
-        command,
-    )
+    state
+        .command_runner
+        .start(&app, &profile.profile_id, &canonical_workdir, command)
 }
 
 #[cfg(test)]
@@ -224,10 +217,7 @@ mod tests {
 
     #[test]
     fn display_path_converts_extended_drive_path() {
-        assert_eq!(
-            display_path(Path::new(r"\\?\C:\demo\web")),
-            r"C:\demo\web"
-        );
+        assert_eq!(display_path(Path::new(r"\\?\C:\demo\web")), r"C:\demo\web");
     }
 
     #[test]
@@ -253,7 +243,10 @@ mod tests {
             Some("candidate-abc"),
             Some("  CANDIDATE-ABC ")
         ));
-        assert!(!candidate_ids_match(Some("candidate-a"), Some("candidate-b")));
+        assert!(!candidate_ids_match(
+            Some("candidate-a"),
+            Some("candidate-b")
+        ));
         assert!(!candidate_ids_match(Some("candidate-a"), None));
     }
 }

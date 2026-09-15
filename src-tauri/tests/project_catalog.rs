@@ -27,7 +27,10 @@ fn project_catalog_persists_and_remove_keeps_project_files() {
     assert!(reloaded.remove_project(&saved.project_id).unwrap());
     assert!(reloaded.list_projects().is_empty());
     assert!(project_root.is_dir());
-    assert_eq!(fs::read_to_string(project_root.join("keep.txt")).unwrap(), "keep");
+    assert_eq!(
+        fs::read_to_string(project_root.join("keep.txt")).unwrap(),
+        "keep"
+    );
 }
 
 #[test]

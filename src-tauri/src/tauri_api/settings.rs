@@ -15,12 +15,12 @@ pub fn save_app_settings_safe(
     let settings = normalize_settings(settings)?;
     with_config_rollback(&state, || {
         let current = state.config.export_json()?;
-        let mut config: AppConfig = serde_json::from_str(&current)
-            .map_err(|e| format!("PROFILE_INVALID:{}", e))?;
+        let mut config: AppConfig =
+            serde_json::from_str(&current).map_err(|e| format!("PROFILE_INVALID:{}", e))?;
         config.settings = settings;
         prune_config_history(&mut config, Utc::now());
-        let normalized = serde_json::to_string_pretty(&config)
-            .map_err(|e| format!("PROFILE_INVALID:{}", e))?;
+        let normalized =
+            serde_json::to_string_pretty(&config).map_err(|e| format!("PROFILE_INVALID:{}", e))?;
         state.config.import_json(&normalized)
     })?;
     state.invalidate_env_detection_cache();

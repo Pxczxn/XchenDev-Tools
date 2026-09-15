@@ -27,9 +27,8 @@ struct DirectChildIdentity {
 
 impl DirectChildIdentity {
     fn capture(pid: u32) -> Result<Self, String> {
-        let start_time_secs = process_start_time_secs(pid).ok_or_else(|| {
-            "LAUNCH_START_FAILED:无法读取子进程启动时间".to_string()
-        })?;
+        let start_time_secs = process_start_time_secs(pid)
+            .ok_or_else(|| "LAUNCH_START_FAILED:无法读取子进程启动时间".to_string())?;
         Ok(Self {
             pid,
             start_time_secs,
@@ -158,17 +157,20 @@ fn register_session(
     command: &str,
     pipe_stdout: bool,
     pipe_stderr: bool,
-) -> Result<(LaunchSessionInfo, Option<std::fs::File>, Option<std::fs::File>), String> {
+) -> Result<
+    (
+        LaunchSessionInfo,
+        Option<std::fs::File>,
+        Option<std::fs::File>,
+    ),
+    String,
+> {
     let session_id = Uuid::new_v4().to_string();
 
     #[cfg(windows)]
     {
-        let spawned = windows_job::spawn_cmd_session(
-            working_directory,
-            command,
-            pipe_stdout,
-            pipe_stderr,
-        )?;
+        let spawned =
+            windows_job::spawn_cmd_session(working_directory, command, pipe_stdout, pipe_stderr)?;
         let direct_child = DirectChildIdentity::capture(spawned.pid)?;
         let pid = spawned.pid;
         let stdout = spawned.stdout;
@@ -726,11 +728,7 @@ impl CommandRunnerState {
 }
 
 #[cfg(test)]
-fn wait_for_child_no_emit(
-    runner: CommandRunnerState,
-    session_id: String,
-    profile_id: String,
-) {
+fn wait_for_child_no_emit(runner: CommandRunnerState, session_id: String, profile_id: String) {
     finalize_process_exit(&runner, &session_id, &profile_id);
 }
 
@@ -899,11 +897,10 @@ mod tests {
         let sid_for_assert = session_id.clone();
         assert_query_responsive(move || {
             let sessions = runner_for_query.list_sessions();
-            assert!(
-                sessions
-                    .iter()
-                    .any(|s| s.launch_session_id == sid_for_assert && s.state == LaunchSessionState::Running)
-            );
+            assert!(sessions
+                .iter()
+                .any(|s| s.launch_session_id == sid_for_assert
+                    && s.state == LaunchSessionState::Running));
         });
 
         wait_until_terminal(&runner, &session_id, Duration::from_secs(20));
@@ -922,9 +919,7 @@ mod tests {
         let runner_for_query = runner.clone();
         let sid = session_id.clone();
         assert_query_responsive(move || {
-            let session = runner_for_query
-                .get(&sid)
-                .expect("session should exist");
+            let session = runner_for_query.get(&sid).expect("session should exist");
             assert_eq!(session.state, LaunchSessionState::Running);
         });
 
@@ -937,11 +932,7 @@ mod tests {
         let info = runner
             .start_for_test("profile-exit", ".", "exit 0")
             .expect("start");
-        let session = wait_until_terminal(
-            &runner,
-            &info.launch_session_id,
-            Duration::from_secs(5),
-        );
+        let session = wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
         assert_eq!(session.state, LaunchSessionState::Stopped);
         assert_eq!(session.exit_code, Some(0));
     }
@@ -952,11 +943,7 @@ mod tests {
         let info = runner
             .start_for_test("profile-exit-failed", ".", "exit /b 7")
             .expect("start");
-        let session = wait_until_terminal(
-            &runner,
-            &info.launch_session_id,
-            Duration::from_secs(5),
-        );
+        let session = wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
         assert_eq!(session.state, LaunchSessionState::Failed);
         assert_eq!(session.exit_code, Some(7));
     }
@@ -976,11 +963,9 @@ mod tests {
                     session.state,
                     LaunchSessionState::Stopped | LaunchSessionState::Failed
                 ) {
-                    let second = runner
-                        .start_for_test(profile_id, ".", "exit 0")
-                        .expect(
-                            "second start must succeed immediately once terminal state is observable",
-                        );
+                    let second = runner.start_for_test(profile_id, ".", "exit 0").expect(
+                        "second start must succeed immediately once terminal state is observable",
+                    );
                     wait_until_terminal(&runner, &second.launch_session_id, Duration::from_secs(5));
                     return;
                 }
@@ -998,7 +983,9 @@ mod tests {
             .expect("start");
         let pid = info.pid.expect("pid");
         std::thread::sleep(Duration::from_millis(200));
-        runner.stop(&info.launch_session_id).expect("stop should succeed");
+        runner
+            .stop(&info.launch_session_id)
+            .expect("stop should succeed");
         assert_pid_exits(pid, Duration::from_secs(3));
         let final_info =
             wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
@@ -1012,7 +999,9 @@ mod tests {
             .start_for_test("profile-stop-terminal", ".", "ping -n 30 127.0.0.1")
             .expect("start");
         std::thread::sleep(Duration::from_millis(200));
-        runner.stop(&info.launch_session_id).expect("stop should succeed");
+        runner
+            .stop(&info.launch_session_id)
+            .expect("stop should succeed");
         if let Some(after_stop) = runner.get(&info.launch_session_id) {
             assert_ne!(after_stop.state, LaunchSessionState::Running);
         }
@@ -1056,7 +1045,9 @@ mod tests {
             let _ = runner_bg.stop(&sid);
         });
         std::thread::sleep(Duration::from_millis(50));
-        runner.stop(&session_id).expect("stop should succeed under race");
+        runner
+            .stop(&session_id)
+            .expect("stop should succeed under race");
         assert_pid_exits(pid, Duration::from_secs(3));
         assert_never_running_again(&runner, &session_id, Duration::from_secs(5));
     }
@@ -1085,13 +1076,17 @@ mod tests {
             "direct child should remain alive after identity mismatch"
         );
         TEST_SKIP_JOB_TERMINATE.store(true, Ordering::SeqCst);
-        runner.stop(&info.launch_session_id).expect_err("still mismatched");
+        runner
+            .stop(&info.launch_session_id)
+            .expect_err("still mismatched");
         runner.test_set_direct_child_start_time(
             &info.launch_session_id,
             process_start_time_secs(pid).expect("live pid"),
         );
         TEST_SKIP_JOB_TERMINATE.store(false, Ordering::SeqCst);
-        runner.stop(&info.launch_session_id).expect("valid identity stop");
+        runner
+            .stop(&info.launch_session_id)
+            .expect("valid identity stop");
         assert_pid_exits(pid, Duration::from_secs(3));
         wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
     }
@@ -1193,11 +1188,7 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn wait_for_descendant(
-        root_pid: u32,
-        name_contains: &str,
-        timeout: Duration,
-    ) -> Option<u32> {
+    fn wait_for_descendant(root_pid: u32, name_contains: &str, timeout: Duration) -> Option<u32> {
         use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -1248,7 +1239,8 @@ mod tests {
         let observe_deadline = Instant::now() + Duration::from_secs(15);
         let mut lingering_ping = None;
         while Instant::now() < observe_deadline {
-            if let Some(ping_pid) = wait_for_descendant(root_pid, "ping", Duration::from_millis(100))
+            if let Some(ping_pid) =
+                wait_for_descendant(root_pid, "ping", Duration::from_millis(100))
             {
                 lingering_ping = Some(ping_pid);
                 break;
@@ -1263,13 +1255,15 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        let lingering_ping =
-            lingering_ping.expect("spawned ping should appear under session root before root exits");
+        let lingering_ping = lingering_ping
+            .expect("spawned ping should appear under session root before root exits");
 
         let terminal = wait_until_terminal(&runner, &session_id, Duration::from_secs(15));
         assert_eq!(terminal.state, LaunchSessionState::Stopped);
 
-        let session_after = runner.get(&session_id).expect("terminal session still queryable");
+        let session_after = runner
+            .get(&session_id)
+            .expect("terminal session still queryable");
         assert_eq!(session_after.state, LaunchSessionState::Stopped);
         assert_eq!(session_after.launch_session_id, session_id);
 
@@ -1281,7 +1275,11 @@ mod tests {
 
         runner.stop(&unrelated.launch_session_id).expect("cleanup");
         assert_pid_exits(unrelated_pid, Duration::from_secs(5));
-        wait_until_terminal(&runner, &unrelated.launch_session_id, Duration::from_secs(5));
+        wait_until_terminal(
+            &runner,
+            &unrelated.launch_session_id,
+            Duration::from_secs(5),
+        );
     }
 
     #[test]
@@ -1382,7 +1380,9 @@ mod tests {
         let session_pid = session.pid.expect("pid");
         std::thread::sleep(Duration::from_millis(200));
 
-        runner.stop(&session.launch_session_id).expect("stop session");
+        runner
+            .stop(&session.launch_session_id)
+            .expect("stop session");
         assert_pid_exits(session_pid, Duration::from_secs(5));
         assert!(
             is_pid_alive(unrelated_pid),
@@ -1391,7 +1391,11 @@ mod tests {
         runner.stop(&unrelated.launch_session_id).expect("cleanup");
         assert_pid_exits(unrelated_pid, Duration::from_secs(5));
         wait_until_terminal(&runner, &session.launch_session_id, Duration::from_secs(5));
-        wait_until_terminal(&runner, &unrelated.launch_session_id, Duration::from_secs(5));
+        wait_until_terminal(
+            &runner,
+            &unrelated.launch_session_id,
+            Duration::from_secs(5),
+        );
     }
 
     #[test]
@@ -1427,8 +1431,8 @@ mod tests {
             .start_for_test("profile-port-release", ".", &command)
             .expect("start");
         let root_pid = info.pid.expect("pid");
-        let _node_pid = wait_for_descendant(root_pid, "node", Duration::from_secs(10))
-            .expect("node server");
+        let _node_pid =
+            wait_for_descendant(root_pid, "node", Duration::from_secs(10)).expect("node server");
 
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {

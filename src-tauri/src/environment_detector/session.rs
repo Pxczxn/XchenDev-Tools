@@ -5,8 +5,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use super::{
-    env_path_candidates, extract_version, insert_path, registry_candidates,
-    should_include_in_list, source_priority, RUNTIME_KINDS,
+    env_path_candidates, extract_version, insert_path, registry_candidates, should_include_in_list,
+    source_priority, RUNTIME_KINDS,
 };
 
 pub struct DetectionSession {

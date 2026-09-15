@@ -23,10 +23,7 @@ fn explorer_is_protected_by_default() {
     };
     let decision = security_guard::protection_for_process(&summary);
     assert!(decision.is_protected);
-    assert!(decision
-        .reason
-        .unwrap_or_default()
-        .contains("系统关键进程"));
+    assert!(decision.reason.unwrap_or_default().contains("系统关键进程"));
 }
 
 #[test]
@@ -37,7 +34,6 @@ fn terminate_protected_process_fails_without_taskkill() {
 
 #[test]
 fn dangerous_command_is_rejected() {
-    let err = security_guard::validate_command_policy("cmd && del /f *")
-        .unwrap_err();
+    let err = security_guard::validate_command_policy("cmd && del /f *").unwrap_err();
     assert!(err.contains("COMMAND_POLICY_REJECTED"));
 }

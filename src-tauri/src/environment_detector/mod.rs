@@ -316,12 +316,18 @@ mod tests {
 
     #[test]
     fn source_priority_orders_native_before_env_before_registry() {
-        assert!(source_priority(&DetectionSource::NativeCommand)
-            < source_priority(&DetectionSource::EnvironmentVariable));
-        assert!(source_priority(&DetectionSource::EnvironmentVariable)
-            < source_priority(&DetectionSource::Registry));
-        assert!(source_priority(&DetectionSource::ManualOverride)
-            < source_priority(&DetectionSource::NativeCommand));
+        assert!(
+            source_priority(&DetectionSource::NativeCommand)
+                < source_priority(&DetectionSource::EnvironmentVariable)
+        );
+        assert!(
+            source_priority(&DetectionSource::EnvironmentVariable)
+                < source_priority(&DetectionSource::Registry)
+        );
+        assert!(
+            source_priority(&DetectionSource::ManualOverride)
+                < source_priority(&DetectionSource::NativeCommand)
+        );
     }
 
     #[test]

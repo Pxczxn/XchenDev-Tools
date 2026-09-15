@@ -226,8 +226,7 @@ fn ensure_export_target_safe(config_path: &Path, target_path: &str) -> Result<()
         let resolved = resolved_path_for_compare(&path)?;
         if same_path(&target, &resolved) {
             return Err(
-                "CONFIG_EXPORT_TARGET_PROTECTED:导出目标不能覆盖当前配置或其事务文件"
-                    .to_string(),
+                "CONFIG_EXPORT_TARGET_PROTECTED:导出目标不能覆盖当前配置或其事务文件".to_string(),
             );
         }
     }
@@ -255,7 +254,9 @@ pub fn get_config_paths(state: State<'_, AppState>) -> (String, String) {
 }
 
 #[tauri::command]
-pub fn list_managed_services(state: State<'_, AppState>) -> Result<Vec<WindowsServiceInfo>, String> {
+pub fn list_managed_services(
+    state: State<'_, AppState>,
+) -> Result<Vec<WindowsServiceInfo>, String> {
     let settings = state.config.get_settings();
     service_manager::list_managed_services(
         &settings.managed_service_kinds,
@@ -287,7 +288,9 @@ mod tests {
         assert!(ensure_export_target_safe(&config, config.to_str().expect("config path")).is_err());
         assert!(ensure_export_target_safe(
             &config,
-            appended_path(&config, ".bak").to_str().expect("backup path")
+            appended_path(&config, ".bak")
+                .to_str()
+                .expect("backup path")
         )
         .is_err());
         assert!(ensure_export_target_safe(

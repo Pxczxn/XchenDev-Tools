@@ -19,20 +19,20 @@ use std::sync::atomic::Ordering;
 use windows::Win32::Foundation::{
     CloseHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, STILL_ACTIVE, WAIT_OBJECT_0,
 };
-use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    SetInformationJobObject, TerminateJobObject,
-};
 #[cfg(test)]
 use windows::Win32::System::JobObjects::IsProcessInJob;
+use windows::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+};
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, GetProcessId,
-    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, ResumeThread,
-    TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject, PROCESS_INFORMATION,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
-    CREATE_NO_WINDOW, CREATE_SUSPENDED, EXTENDED_STARTUPINFO_PRESENT, INFINITE,
+    InitializeProcThreadAttributeList, ResumeThread, TerminateProcess, UpdateProcThreadAttribute,
+    WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, EXTENDED_STARTUPINFO_PRESENT,
+    INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
 };
 #[cfg(test)]
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION};
@@ -204,8 +204,7 @@ impl PipePair {
         let mut read = HANDLE::default();
         let mut write = HANDLE::default();
         unsafe {
-            CreatePipe(&mut read, &mut write, None, 0)
-                .map_err(|e| format!("CreatePipe: {}", e))?;
+            CreatePipe(&mut read, &mut write, None, 0).map_err(|e| format!("CreatePipe: {}", e))?;
             SetHandleInformation(read, HANDLE_FLAG_INHERIT.0, Default::default())
                 .map_err(|e| format!("SetHandleInformation(read): {}", e))?;
             SetHandleInformation(write, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT)

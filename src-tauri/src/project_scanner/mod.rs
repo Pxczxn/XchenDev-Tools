@@ -1,6 +1,4 @@
-use crate::domain::{
-    CandidateStatus, ProjectScanResult, TechnologyCandidate, TechnologyStack,
-};
+use crate::domain::{CandidateStatus, ProjectScanResult, TechnologyCandidate, TechnologyStack};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -106,11 +104,7 @@ fn should_skip_directory(path: &Path) -> bool {
         .any(|ignored| name.eq_ignore_ascii_case(ignored))
 }
 
-fn scan_dir(
-    dir: &Path,
-    root: &Path,
-    out: &mut Vec<TechnologyCandidate>,
-) -> Result<(), String> {
+fn scan_dir(dir: &Path, root: &Path, out: &mut Vec<TechnologyCandidate>) -> Result<(), String> {
     for (file_name, stack) in EVIDENCE_FILES {
         let evidence = dir.join(file_name);
         if !evidence.is_file() {
@@ -118,7 +112,9 @@ fn scan_dir(
         }
         let candidate = build_candidate(dir, root, &evidence, *stack, file_name)?;
         let duplicate_stack = out.iter().any(|existing| {
-            existing.directory.eq_ignore_ascii_case(&candidate.directory)
+            existing
+                .directory
+                .eq_ignore_ascii_case(&candidate.directory)
                 && existing.stack == candidate.stack
         });
         if !duplicate_stack {
@@ -141,7 +137,8 @@ fn build_candidate(
 
     match stack {
         TechnologyStack::Node => {
-            let content = fs::read_to_string(evidence).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
+            let content =
+                fs::read_to_string(evidence).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
             let scripts = parse_npm_scripts(&content);
             let preferred = preferred_node_scripts(&scripts);
             let (status, suggested_command, conflict_group) = if preferred.len() == 1 {
@@ -184,7 +181,8 @@ fn build_candidate(
             })
         }
         TechnologyStack::Maven => {
-            let content = fs::read_to_string(evidence).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
+            let content =
+                fs::read_to_string(evidence).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
             let packaging_pom = xml_tag_value(&content, "packaging")
                 .is_some_and(|value| value.eq_ignore_ascii_case("pom"));
             let is_spring_boot_module = is_spring_boot_maven(&content);
@@ -214,7 +212,8 @@ fn build_candidate(
             })
         }
         TechnologyStack::Gradle => {
-            let content = fs::read_to_string(evidence).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
+            let content =
+                fs::read_to_string(evidence).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
             let is_spring_boot_module = content.contains("org.springframework.boot")
                 || content.contains("spring-boot-gradle-plugin");
             let gradlew = dir.join("gradlew.bat");
@@ -342,14 +341,18 @@ fn mark_conflicts(candidates: &mut [TechnologyCandidate]) {
     }
 
     for candidate in candidates.iter_mut() {
-        let Some((has_maven, has_gradle)) =
-            java_builds_by_dir.get(&candidate.directory.to_lowercase()).copied()
+        let Some((has_maven, has_gradle)) = java_builds_by_dir
+            .get(&candidate.directory.to_lowercase())
+            .copied()
         else {
             continue;
         };
         if has_maven
             && has_gradle
-            && matches!(candidate.stack, TechnologyStack::Maven | TechnologyStack::Gradle)
+            && matches!(
+                candidate.stack,
+                TechnologyStack::Maven | TechnologyStack::Gradle
+            )
         {
             candidate.status = CandidateStatus::Conflict;
             candidate.conflict_group = Some(format!("java-build-system-{}", candidate.directory));
@@ -383,7 +386,9 @@ mod tests {
         let missing = root.path().join("missing");
 
         assert!(read_scan_entries(&missing, 1).is_err());
-        assert!(read_scan_entries(&missing, 2).expect("nested policy").is_none());
+        assert!(read_scan_entries(&missing, 2)
+            .expect("nested policy")
+            .is_none());
     }
 
     #[test]
@@ -413,11 +418,15 @@ mod tests {
         )
         .expect("ignored package");
 
-        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let result =
+            scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         assert_eq!(result.scan_depth, MAX_SCAN_DEPTH);
         assert_eq!(result.candidates.len(), 1);
         assert!(result.candidates[0].directory.ends_with("starter"));
-        assert_eq!(result.candidates[0].status, CandidateStatus::NeedsConfirmation);
+        assert_eq!(
+            result.candidates[0].status,
+            CandidateStatus::NeedsConfirmation
+        );
         assert_eq!(
             result.candidates[0].suggested_command.as_deref(),
             Some("mvn spring-boot:run")
@@ -433,7 +442,8 @@ mod tests {
         )
         .expect("pom");
 
-        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let result =
+            scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         let candidate = result.candidates.first().expect("candidate");
         assert_eq!(candidate.status, CandidateStatus::EvidenceOnly);
         assert!(candidate.suggested_command.is_none());
@@ -448,10 +458,14 @@ mod tests {
         )
         .expect("pom");
 
-        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let result =
+            scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         let candidate = result.candidates.first().expect("candidate");
         assert_eq!(candidate.status, CandidateStatus::NeedsConfirmation);
-        assert_eq!(candidate.suggested_command.as_deref(), Some("mvn spring-boot:run"));
+        assert_eq!(
+            candidate.suggested_command.as_deref(),
+            Some("mvn spring-boot:run")
+        );
     }
 
     #[test]
@@ -463,10 +477,14 @@ mod tests {
         )
         .expect("pom");
 
-        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let result =
+            scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         let candidate = result.candidates.first().expect("candidate");
         assert_eq!(candidate.stack, TechnologyStack::Maven);
-        assert_eq!(candidate.suggested_command.as_deref(), Some("mvn spring-boot:run"));
+        assert_eq!(
+            candidate.suggested_command.as_deref(),
+            Some("mvn spring-boot:run")
+        );
     }
 
     #[test]
@@ -479,10 +497,14 @@ mod tests {
         .expect("gradle kts");
         fs::write(root.path().join("gradlew.bat"), "@echo off").expect("wrapper");
 
-        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let result =
+            scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         let candidate = result.candidates.first().expect("candidate");
         assert_eq!(candidate.stack, TechnologyStack::Gradle);
-        assert_eq!(candidate.suggested_command.as_deref(), Some(".\\gradlew.bat bootRun"));
+        assert_eq!(
+            candidate.suggested_command.as_deref(),
+            Some(".\\gradlew.bat bootRun")
+        );
     }
 
     #[test]
@@ -490,7 +512,8 @@ mod tests {
         let root = tempdir().expect("tempdir");
         fs::write(root.path().join("build.gradle"), "plugins { id 'java' }").expect("gradle");
 
-        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let result =
+            scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         let candidate = result.candidates.first().expect("candidate");
         assert_eq!(candidate.stack, TechnologyStack::Gradle);
         assert!(candidate.suggested_command.is_none());
@@ -500,10 +523,15 @@ mod tests {
     fn rust_binary_project_suggests_cargo_run() {
         let root = tempdir().expect("tempdir");
         fs::create_dir_all(root.path().join("src")).expect("src");
-        fs::write(root.path().join("Cargo.toml"), "[package]\nname='demo'\nversion='0.1.0'\n").expect("cargo");
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname='demo'\nversion='0.1.0'\n",
+        )
+        .expect("cargo");
         fs::write(root.path().join("src").join("main.rs"), "fn main() {}\n").expect("main");
 
-        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let result =
+            scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         let candidate = result.candidates.first().expect("candidate");
         assert_eq!(candidate.stack, TechnologyStack::Rust);
         assert_eq!(candidate.status, CandidateStatus::NeedsConfirmation);
@@ -514,10 +542,15 @@ mod tests {
     fn rust_library_project_is_evidence_only() {
         let root = tempdir().expect("tempdir");
         fs::create_dir_all(root.path().join("src")).expect("src");
-        fs::write(root.path().join("Cargo.toml"), "[package]\nname='demo-lib'\nversion='0.1.0'\n").expect("cargo");
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname='demo-lib'\nversion='0.1.0'\n",
+        )
+        .expect("cargo");
         fs::write(root.path().join("src").join("lib.rs"), "pub fn demo() {}\n").expect("lib");
 
-        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let result =
+            scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         let candidate = result.candidates.first().expect("candidate");
         assert_eq!(candidate.stack, TechnologyStack::Rust);
         assert_eq!(candidate.status, CandidateStatus::EvidenceOnly);
@@ -528,9 +561,14 @@ mod tests {
     fn multiple_evidence_files_for_same_stack_are_deduplicated() {
         let root = tempdir().expect("tempdir");
         fs::write(root.path().join("requirements.txt"), "fastapi\n").expect("requirements");
-        fs::write(root.path().join("pyproject.toml"), "[project]\nname='demo'\n").expect("pyproject");
+        fs::write(
+            root.path().join("pyproject.toml"),
+            "[project]\nname='demo'\n",
+        )
+        .expect("pyproject");
 
-        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let result =
+            scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         assert_eq!(result.candidates.len(), 1);
         assert_eq!(result.candidates[0].stack, TechnologyStack::Python);
         assert_eq!(result.candidates[0].status, CandidateStatus::EvidenceOnly);
@@ -553,7 +591,8 @@ mod tests {
         .expect("cargo");
         fs::write(root.path().join("src").join("main.rs"), "fn main() {}\n").expect("main");
 
-        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let result =
+            scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         assert_eq!(result.candidates.len(), 2);
         let node = result
             .candidates
@@ -581,7 +620,8 @@ mod tests {
         .expect("pom");
         fs::write(root.path().join("build.gradle"), "plugins { id 'java' }").expect("gradle");
 
-        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let result =
+            scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         assert_eq!(result.candidates.len(), 2);
         for candidate in &result.candidates {
             assert_eq!(candidate.status, CandidateStatus::Conflict);
@@ -629,7 +669,10 @@ mod tests {
             .expect("web candidate");
         assert_eq!(web_candidate.stack, TechnologyStack::Node);
         assert_eq!(web_candidate.status, CandidateStatus::NeedsConfirmation);
-        assert_eq!(web_candidate.suggested_command.as_deref(), Some("npm run dev"));
+        assert_eq!(
+            web_candidate.suggested_command.as_deref(),
+            Some("npm run dev")
+        );
 
         let parent_candidate = first
             .candidates
@@ -652,10 +695,21 @@ mod tests {
             Some("mvn spring-boot:run")
         );
 
-        let mut first_ids: Vec<_> = first.candidates.iter().map(|candidate| candidate.id.clone()).collect();
-        let mut second_ids: Vec<_> = second.candidates.iter().map(|candidate| candidate.id.clone()).collect();
+        let mut first_ids: Vec<_> = first
+            .candidates
+            .iter()
+            .map(|candidate| candidate.id.clone())
+            .collect();
+        let mut second_ids: Vec<_> = second
+            .candidates
+            .iter()
+            .map(|candidate| candidate.id.clone())
+            .collect();
         first_ids.sort();
         second_ids.sort();
-        assert_eq!(first_ids, second_ids, "candidate ids must be stable across rescans");
+        assert_eq!(
+            first_ids, second_ids,
+            "candidate ids must be stable across rescans"
+        );
     }
 }

@@ -1,4 +1,4 @@
-use crate::domain::{ProtectionDecision, ProcessSummary};
+use crate::domain::{ProcessSummary, ProtectionDecision};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 

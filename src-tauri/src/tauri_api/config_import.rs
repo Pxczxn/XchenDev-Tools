@@ -28,8 +28,7 @@ fn ensure_no_active_launch_sessions(state: &AppState) -> Result<(), String> {
     });
     if has_active {
         return Err(
-            "CONFIG_IMPORT_BLOCKED_ACTIVE_SESSIONS:请先停止所有项目运行会话再导入配置"
-                .to_string(),
+            "CONFIG_IMPORT_BLOCKED_ACTIVE_SESSIONS:请先停止所有项目运行会话再导入配置".to_string(),
         );
     }
     Ok(())
@@ -406,11 +405,9 @@ mod tests {
     fn import_rejects_workdir_outside_project() {
         let mut config = AppConfig::default();
         config.projects.push(project());
-        config.launch_profiles.push(profile(
-            "profile-a",
-            "C:\\other\\web",
-            Some("candidate-a"),
-        ));
+        config
+            .launch_profiles
+            .push(profile("profile-a", "C:\\other\\web", Some("candidate-a")));
 
         let json = serde_json::to_string(&config).expect("serialize");
         let err = normalize_import_content(&json).expect_err("outside workdir must fail");
@@ -453,11 +450,9 @@ mod tests {
     fn import_rejects_sibling_prefix_as_project_child() {
         let mut config = AppConfig::default();
         config.projects.push(project());
-        config.launch_profiles.push(profile(
-            "profile-a",
-            "C:\\demox\\web",
-            Some("candidate-a"),
-        ));
+        config
+            .launch_profiles
+            .push(profile("profile-a", "C:\\demox\\web", Some("candidate-a")));
 
         let json = serde_json::to_string(&config).expect("serialize");
         let err = normalize_import_content(&json).expect_err("sibling prefix must fail");
@@ -506,9 +501,11 @@ mod tests {
         config
             .launch_profiles
             .push(profile("profile-a", "C:\\demo\\web", Some("candidate-a")));
-        config
-            .launch_profiles
-            .push(profile("profile-b", r"\\?\C:\demo\web\", Some("candidate-b")));
+        config.launch_profiles.push(profile(
+            "profile-b",
+            r"\\?\C:\demo\web\",
+            Some("candidate-b"),
+        ));
 
         let json = serde_json::to_string(&config).expect("serialize");
         let err = normalize_import_content(&json)

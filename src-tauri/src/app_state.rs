@@ -251,11 +251,9 @@ impl AppState {
                 .num_seconds();
             age >= 0 && age <= PROCESS_CONFIRMATION_TTL_SECS
         });
-        make_room_for_pending(
-            &mut map,
-            MAX_PENDING_PROCESS_CONFIRMATIONS,
-            |item| item.created_at.timestamp_millis(),
-        );
+        make_room_for_pending(&mut map, MAX_PENDING_PROCESS_CONFIRMATIONS, |item| {
+            item.created_at.timestamp_millis()
+        });
         map.insert(token.clone(), pending);
         let action = if mode.eq_ignore_ascii_case("force") {
             "强制终止"
@@ -374,12 +372,7 @@ mod tests {
         let state = AppState::new();
         for index in 0..(MAX_PENDING_LAUNCH_CONFIRMATIONS + 16) {
             state
-                .issue_confirmation(
-                    &format!("profile-{index}"),
-                    "echo ok",
-                    ".",
-                    "frontend",
-                )
+                .issue_confirmation(&format!("profile-{index}"), "echo ok", ".", "frontend")
                 .unwrap();
         }
         assert!(state.confirmations.lock().unwrap().len() <= MAX_PENDING_LAUNCH_CONFIRMATIONS);

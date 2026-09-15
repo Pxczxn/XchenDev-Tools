@@ -1,8 +1,6 @@
 use crate::app_state::AppState;
 use crate::audit_log;
-use crate::domain::{
-    OperationResult, OperationStatus, WindowsServiceInfo, WindowsServiceStatus,
-};
+use crate::domain::{OperationResult, OperationStatus, WindowsServiceInfo, WindowsServiceStatus};
 use crate::service_manager;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
@@ -43,9 +41,7 @@ fn service_control_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn make_room_for_service_confirmation(
-    store: &mut HashMap<String, PendingServiceConfirmation>,
-) {
+fn make_room_for_service_confirmation(store: &mut HashMap<String, PendingServiceConfirmation>) {
     while !store.is_empty() && store.len() >= MAX_PENDING_SERVICE_CONFIRMATIONS {
         let oldest = store
             .iter()
@@ -66,7 +62,10 @@ fn normalize_action(action: &str) -> Result<String, String> {
     }
 }
 
-fn find_managed_service(state: &AppState, service_name: &str) -> Result<WindowsServiceInfo, String> {
+fn find_managed_service(
+    state: &AppState,
+    service_name: &str,
+) -> Result<WindowsServiceInfo, String> {
     let service_name = service_name.trim();
     let settings = state.config.get_settings();
     service_manager::list_managed_services(
@@ -98,7 +97,11 @@ fn query_service_status(service_name: &str) -> Result<WindowsServiceStatus, Stri
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = if !stderr.trim().is_empty() { stderr } else { stdout };
+        let detail = if !stderr.trim().is_empty() {
+            stderr
+        } else {
+            stdout
+        };
         return Err(format!("SERVICE_QUERY_FAILED:{}", detail.trim()));
     }
 
@@ -122,10 +125,7 @@ fn wait_for_status(service_name: &str, target: WindowsServiceStatus) -> Result<(
     }
 }
 
-fn execute_service_action(
-    service: &WindowsServiceInfo,
-    action: &str,
-) -> Result<(), String> {
+fn execute_service_action(service: &WindowsServiceInfo, action: &str) -> Result<(), String> {
     match action.trim().to_lowercase().as_str() {
         "start" => {
             if service.status == WindowsServiceStatus::Running {
@@ -192,7 +192,8 @@ pub fn issue_service_control_confirmation_safe(
     Ok(ServiceControlConfirmation {
         confirmation_token: token,
         binding_summary: format!("{} {} ({:?})", action, service.display_name, service.status),
-        expires_at: (Utc::now() + ChronoDuration::seconds(SERVICE_CONFIRMATION_TTL_SECS)).to_rfc3339(),
+        expires_at: (Utc::now() + ChronoDuration::seconds(SERVICE_CONFIRMATION_TTL_SECS))
+            .to_rfc3339(),
     })
 }
 
@@ -310,8 +311,14 @@ mod tests {
     fn binding_changes_with_action_or_status() {
         let running = service(WindowsServiceStatus::Running);
         let stopped = service(WindowsServiceStatus::Stopped);
-        assert_ne!(binding_digest(&running, "stop"), binding_digest(&running, "start"));
-        assert_ne!(binding_digest(&running, "stop"), binding_digest(&stopped, "stop"));
+        assert_ne!(
+            binding_digest(&running, "stop"),
+            binding_digest(&running, "start")
+        );
+        assert_ne!(
+            binding_digest(&running, "stop"),
+            binding_digest(&stopped, "stop")
+        );
     }
 
     #[test]
