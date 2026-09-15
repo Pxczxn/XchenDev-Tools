@@ -42,6 +42,12 @@ export interface PortOccupancy {
   protection: { is_protected: boolean; reason?: string };
 }
 
+export interface ProcessTerminationConfirmation {
+  confirmation_token: string;
+  binding_summary: string;
+  expires_at: string;
+}
+
 export interface DirectoryProcessMatch {
   match_level: number;
   pid: number;
