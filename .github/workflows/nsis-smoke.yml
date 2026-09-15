@@ -1,0 +1,116 @@
+name: One-shot NSIS Packaging Smoke
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/nsis-smoke.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  package-nsis:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Configure NSIS bundle
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src-tauri/tauri.conf.json")
+          text = path.read_text(encoding="utf-8")
+          old = '''  "bundle": {
+            "active": true,
+            "targets": "all",
+            "icon": [
+              "icons/icon.ico"
+            ]
+          }'''.replace("          ", "")
+          new = '''  "bundle": {
+            "active": true,
+            "targets": ["nsis"],
+            "icon": [
+              "icons/icon.ico"
+            ],
+            "windows": {
+              "nsis": {
+                "installMode": "currentUser",
+                "languages": ["SimpChinese", "English"],
+                "displayLanguageSelector": true
+              }
+            }
+          }'''.replace("          ", "")
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"expected one bundle block, found {count}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+          PY
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend dependency audit
+        run: npm audit --audit-level=moderate
+
+      - name: Build NSIS installer
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Verify installer artifact
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS setup exe, found $($installers.Count)"
+          }
+          $installer = $installers[0]
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content -Encoding ascii installer-sha256.txt
+          Write-Host "Installer: $($installer.FullName)"
+          Write-Host "Size: $($installer.Length) bytes"
+          Write-Host "SHA256: $hash"
+
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: XchenDev-Tools-NSIS-smoke
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            installer-sha256.txt
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Commit NSIS configuration
+        shell: pwsh
+        run: |
+          git config user.name "XchenDev"
+          git config user.email "Pxczxn@163.com"
+          git add src-tauri/tauri.conf.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "【build】配置 NSIS 当前用户双语安装包"
+            git push
+          }
