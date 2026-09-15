@@ -10,6 +10,18 @@ pub fn save_manual_override_safe(
     runtime_kind: String,
     executable_path: String,
 ) -> Result<EnvironmentCandidate, String> {
+    let runtime_kind = runtime_kind.trim().to_lowercase();
+    if !environment_detector::all_runtime_kind_ids()
+        .iter()
+        .any(|allowed| *allowed == runtime_kind)
+    {
+        return Err(format!(
+            "RUNTIME_KIND_INVALID:不支持的运行时类型 {}",
+            runtime_kind
+        ));
+    }
+
+    let executable_path = executable_path.trim().to_string();
     let candidate = with_config_rollback(&state, || {
         environment_detector::validate_and_save_override(
             &state.config,
