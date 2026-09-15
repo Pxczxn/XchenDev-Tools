@@ -30,9 +30,14 @@ fn canonical_directory(path: &str, error_code: &str) -> Result<PathBuf, String> 
 }
 
 fn display_path(path: &Path) -> String {
-    path.to_string_lossy()
-        .trim_start_matches(r"\\?\")
-        .to_string()
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{}", rest)
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        raw.into_owned()
+    }
 }
 
 fn normalize_candidate_id(value: Option<String>) -> Option<String> {
@@ -215,6 +220,22 @@ pub fn start_launch_profile_safe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_path_converts_extended_drive_path() {
+        assert_eq!(
+            display_path(Path::new(r"\\?\C:\demo\web")),
+            r"C:\demo\web"
+        );
+    }
+
+    #[test]
+    fn display_path_converts_extended_unc_path() {
+        assert_eq!(
+            display_path(Path::new(r"\\?\UNC\server\share\demo")),
+            r"\\server\share\demo"
+        );
+    }
 
     #[test]
     fn candidate_id_normalization_trims_and_lowercases() {
