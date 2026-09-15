@@ -5,6 +5,17 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const MAX_SCAN_DEPTH: u8 = 3;
+const SKIP_DIRECTORIES: &[&str] = &[
+    ".git",
+    ".idea",
+    ".vscode",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+];
+
 const EVIDENCE_FILES: &[(&str, TechnologyStack)] = &[
     ("package.json", TechnologyStack::Node),
     ("pom.xml", TechnologyStack::Maven),
@@ -24,29 +35,50 @@ pub fn scan_project_directory(root_path: &str) -> Result<ProjectScanResult, Stri
     let canonical = fs::canonicalize(root).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
 
     let mut candidates = Vec::new();
-    scan_dir(&canonical, &canonical, 1, &mut candidates)?;
-    if let Ok(entries) = fs::read_dir(&canonical) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                scan_dir(&path, &canonical, 2, &mut candidates)?;
-            }
-        }
-    }
-
+    scan_tree(&canonical, &canonical, 1, &mut candidates)?;
     mark_conflicts(&mut candidates);
 
     Ok(ProjectScanResult {
         root_path: canonical.to_string_lossy().to_string(),
-        scan_depth: 2,
+        scan_depth: MAX_SCAN_DEPTH,
         candidates,
     })
+}
+
+fn scan_tree(
+    dir: &Path,
+    root: &Path,
+    level: u8,
+    out: &mut Vec<TechnologyCandidate>,
+) -> Result<(), String> {
+    scan_dir(dir, root, out)?;
+    if level >= MAX_SCAN_DEPTH {
+        return Ok(());
+    }
+
+    let entries = fs::read_dir(dir).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() || should_skip_directory(&path) {
+            continue;
+        }
+        scan_tree(&path, root, level + 1, out)?;
+    }
+    Ok(())
+}
+
+fn should_skip_directory(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    SKIP_DIRECTORIES
+        .iter()
+        .any(|ignored| name.eq_ignore_ascii_case(ignored))
 }
 
 fn scan_dir(
     dir: &Path,
     root: &Path,
-    _level: u8,
     out: &mut Vec<TechnologyCandidate>,
 ) -> Result<(), String> {
     for (file_name, stack) in EVIDENCE_FILES {
@@ -116,19 +148,33 @@ fn build_candidate(
             })
         }
         TechnologyStack::Maven => {
+            let content = fs::read_to_string(evidence).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
+            let packaging_pom = xml_tag_value(&content, "packaging")
+                .is_some_and(|value| value.eq_ignore_ascii_case("pom"));
+            let is_spring_boot_module = content.contains("spring-boot-maven-plugin");
             let mvnw = dir.join("mvnw.cmd");
-            let cmd = if mvnw.is_file() {
-                ".\\mvnw.cmd spring-boot:run".to_string()
+            let runner = if mvnw.is_file() { ".\\mvnw.cmd" } else { "mvn" };
+
+            let (status, suggested_command) = if packaging_pom {
+                // 聚合/父 POM 本身通常不可直接运行。继续向下扫描真实启动模块。
+                (CandidateStatus::EvidenceOnly, None)
+            } else if is_spring_boot_module {
+                (
+                    CandidateStatus::Ready,
+                    Some(format!("{} spring-boot:run", runner)),
+                )
             } else {
-                "mvn spring-boot:run".to_string()
+                // 有 Maven 证据，但没有足够证据证明它是可启动的 Spring Boot 模块。
+                (CandidateStatus::NeedsConfirmation, None)
             };
+
             Ok(TechnologyCandidate {
                 id,
                 directory,
                 evidence_file,
                 stack,
-                status: CandidateStatus::NeedsConfirmation,
-                suggested_command: Some(cmd),
+                status,
+                suggested_command,
                 scripts: None,
                 conflict_group: None,
             })
@@ -172,6 +218,14 @@ fn build_candidate(
             conflict_group: None,
         }),
     }
+}
+
+fn xml_tag_value<'a>(content: &'a str, tag: &str) -> Option<&'a str> {
+    let start_tag = format!("<{}>", tag);
+    let end_tag = format!("</{}>", tag);
+    let start = content.find(&start_tag)? + start_tag.len();
+    let end = content[start..].find(&end_tag)? + start;
+    Some(content[start..end].trim())
 }
 
 fn stable_candidate_id(root: &Path, dir: &Path, file_name: &str, stack: TechnologyStack) -> String {
@@ -242,43 +296,61 @@ mod tests {
     }
 
     #[test]
-    fn scans_frontend_and_backend_and_keeps_candidate_ids_stable() {
+    fn scan_depth_three_finds_nested_module_and_skips_build_directories() {
         let root = tempdir().expect("tempdir");
-        let frontend = root.path().join("frontend");
         let backend = root.path().join("backend");
-        fs::create_dir_all(&frontend).unwrap();
-        fs::create_dir_all(&backend).unwrap();
+        let starter = backend.join("starter");
+        let ignored = backend.join("target").join("generated");
+        fs::create_dir_all(&starter).expect("starter dir");
+        fs::create_dir_all(&ignored).expect("ignored dir");
         fs::write(
-            frontend.join("package.json"),
-            r#"{"scripts":{"build":"vite build","dev":"vite","test":"vitest"}}"#,
+            starter.join("pom.xml"),
+            "<project><packaging>jar</packaging><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>",
         )
-        .unwrap();
-        fs::write(backend.join("pom.xml"), "<project></project>").unwrap();
+        .expect("starter pom");
+        fs::write(
+            ignored.join("package.json"),
+            r#"{"scripts":{"dev":"vite"}}"#,
+        )
+        .expect("ignored package");
 
-        let first = scan_project_directory(root.path().to_str().unwrap()).expect("first scan");
-        let second = scan_project_directory(root.path().to_str().unwrap()).expect("second scan");
-        assert_eq!(first.candidates.len(), 2);
-        assert_eq!(second.candidates.len(), 2);
+        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        assert_eq!(result.scan_depth, MAX_SCAN_DEPTH);
+        assert_eq!(result.candidates.len(), 1);
+        assert!(result.candidates[0].directory.ends_with("starter"));
+        assert_eq!(
+            result.candidates[0].suggested_command.as_deref(),
+            Some("mvn spring-boot:run")
+        );
+    }
 
-        let node = first
-            .candidates
-            .iter()
-            .find(|candidate| candidate.stack == TechnologyStack::Node)
-            .expect("node candidate");
-        assert_eq!(node.status, CandidateStatus::Ready);
-        assert_eq!(node.suggested_command.as_deref(), Some("npm run dev"));
+    #[test]
+    fn maven_aggregator_pom_is_evidence_only() {
+        let root = tempdir().expect("tempdir");
+        fs::write(
+            root.path().join("pom.xml"),
+            "<project><packaging>pom</packaging><modules><module>starter</module></modules></project>",
+        )
+        .expect("pom");
 
-        let maven = first
-            .candidates
-            .iter()
-            .find(|candidate| candidate.stack == TechnologyStack::Maven)
-            .expect("maven candidate");
-        assert_eq!(maven.status, CandidateStatus::NeedsConfirmation);
+        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let candidate = result.candidates.first().expect("candidate");
+        assert_eq!(candidate.status, CandidateStatus::EvidenceOnly);
+        assert!(candidate.suggested_command.is_none());
+    }
 
-        let mut first_ids: Vec<_> = first.candidates.iter().map(|candidate| candidate.id.clone()).collect();
-        let mut second_ids: Vec<_> = second.candidates.iter().map(|candidate| candidate.id.clone()).collect();
-        first_ids.sort();
-        second_ids.sort();
-        assert_eq!(first_ids, second_ids);
+    #[test]
+    fn spring_boot_maven_module_is_ready() {
+        let root = tempdir().expect("tempdir");
+        fs::write(
+            root.path().join("pom.xml"),
+            "<project><packaging>jar</packaging><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>",
+        )
+        .expect("pom");
+
+        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let candidate = result.candidates.first().expect("candidate");
+        assert_eq!(candidate.status, CandidateStatus::Ready);
+        assert_eq!(candidate.suggested_command.as_deref(), Some("mvn spring-boot:run"));
     }
 }
