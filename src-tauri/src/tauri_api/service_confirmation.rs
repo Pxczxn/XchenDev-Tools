@@ -37,14 +37,21 @@ fn confirmations() -> &'static Mutex<HashMap<String, PendingServiceConfirmation>
     STORE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn validate_action(action: &str) -> Result<(), String> {
-    match action.to_lowercase().as_str() {
-        "start" | "stop" | "restart" => Ok(()),
+fn service_control_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn normalize_action(action: &str) -> Result<String, String> {
+    let normalized = action.trim().to_lowercase();
+    match normalized.as_str() {
+        "start" | "stop" | "restart" => Ok(normalized),
         _ => Err("SERVICE_ACTION_INVALID:不支持的操作".to_string()),
     }
 }
 
 fn find_managed_service(state: &AppState, service_name: &str) -> Result<WindowsServiceInfo, String> {
+    let service_name = service_name.trim();
     let settings = state.config.get_settings();
     service_manager::list_managed_services(
         &settings.managed_service_kinds,
@@ -59,7 +66,7 @@ fn binding_digest(service: &WindowsServiceInfo, action: &str) -> String {
     let binding = format!(
         "{}|{}|{:?}",
         service.service_name.to_lowercase(),
-        action.to_lowercase(),
+        action.trim().to_lowercase(),
         service.status
     );
     let mut hasher = Sha256::new();
@@ -103,7 +110,7 @@ fn execute_service_action(
     service: &WindowsServiceInfo,
     action: &str,
 ) -> Result<(), String> {
-    match action.to_lowercase().as_str() {
+    match action.trim().to_lowercase().as_str() {
         "start" => {
             if service.status == WindowsServiceStatus::Running {
                 return Ok(());
@@ -142,7 +149,8 @@ pub fn issue_service_control_confirmation_safe(
     service_name: String,
     action: String,
 ) -> Result<ServiceControlConfirmation, String> {
-    validate_action(&action)?;
+    let service_name = service_name.trim().to_string();
+    let action = normalize_action(&action)?;
     let service = find_managed_service(&state, &service_name)?;
     if !service.can_control {
         return Err("SERVICE_CONTROL_DENIED:当前服务不可控制".to_string());
@@ -178,7 +186,15 @@ pub fn control_windows_service_safe(
     action: String,
     confirmation_token: String,
 ) -> Result<OperationResult, String> {
-    validate_action(&action)?;
+    let service_name = service_name.trim().to_string();
+    let action = normalize_action(&action)?;
+
+    // Serialize service mutations so two confirmations issued from the same starting state
+    // cannot both pass validation and then race stop/start/restart against each other.
+    let _control_guard = service_control_lock()
+        .lock()
+        .map_err(|_| "SERVICE_CONTROL_LOCK_FAILED:服务控制锁失败".to_string())?;
+
     let pending = {
         let mut store = confirmations()
             .lock()
@@ -282,11 +298,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_action() {
-        assert!(validate_action("start").is_ok());
-        assert!(validate_action("stop").is_ok());
-        assert!(validate_action("restart").is_ok());
-        assert!(validate_action("delete").is_err());
+    fn action_validation_trims_and_normalizes_known_values() {
+        assert_eq!(normalize_action(" START ").unwrap(), "start");
+        assert_eq!(normalize_action("Stop").unwrap(), "stop");
+        assert_eq!(normalize_action("restart").unwrap(), "restart");
+        assert!(normalize_action("delete").is_err());
     }
 
     #[test]
