@@ -200,7 +200,7 @@ fn register_session(
             .map_err(|_| "lock")?
             .insert(profile_id.to_string(), session_id);
 
-        return Ok((info, stdout, stderr));
+        Ok((info, stdout, stderr))
     }
 
     #[cfg(not(windows))]
@@ -1162,7 +1162,7 @@ mod tests {
 
     #[cfg(windows)]
     fn collect_process_tree_pids(root_pid: u32) -> Vec<u32> {
-        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
         let mut system = System::new();
         system.refresh_processes_specifics(
             ProcessesToUpdate::All,

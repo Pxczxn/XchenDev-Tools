@@ -51,6 +51,12 @@ pub struct ConfigStore {
     pub config: Mutex<AppConfig>,
 }
 
+impl Default for ConfigStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConfigStore {
     pub fn new() -> Self {
         let path = config_file_path();
