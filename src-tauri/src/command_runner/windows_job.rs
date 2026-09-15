@@ -2,13 +2,13 @@
 //!
 //! Spawn: CreateJobObject → CreateProcessW(CREATE_SUSPENDED) → AssignProcessToJobObject → ResumeThread.
 //! Stop: TerminateJobObject. Flag: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE only.
-//! Handle inheritance: STARTUPINFOEX + PROC_THREAD_ATTRIBUTE_HANDLE_LIST only exposes session stdio pipes.
+//! Handle inheritance: STARTUPINFOEX + PROC_THREAD_ATTRIBUTE_HANDLE_LIST only exposes session stdio handles.
 
 use std::ffi::c_void;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::mem::{size_of, size_of_val};
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::{FromRawHandle, RawHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
 use std::path::Path;
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
@@ -229,6 +229,19 @@ impl PipePair {
     }
 }
 
+fn inheritable_null_input() -> Result<File, String> {
+    let file = OpenOptions::new()
+        .read(true)
+        .open("NUL")
+        .map_err(|e| format!("LAUNCH_START_FAILED:无法打开 NUL 标准输入: {}", e))?;
+    let handle = HANDLE(file.as_raw_handle());
+    unsafe {
+        SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT)
+            .map_err(|e| format!("SetHandleInformation(stdin): {}", e))?;
+    }
+    Ok(file)
+}
+
 fn terminate_process_handle(process: HANDLE) {
     unsafe {
         let _ = TerminateProcess(process, 1);
@@ -267,7 +280,17 @@ pub fn spawn_cmd_session(
     let cwd_wide = os_wide_path(Path::new(working_directory));
     let mut pi = PROCESS_INFORMATION::default();
 
-    let mut inherited_handles = Vec::with_capacity(2);
+    let redirected_stdio = stdout_pipe.is_some() || stderr_pipe.is_some();
+    let stdin_file = if redirected_stdio {
+        Some(inheritable_null_input()?)
+    } else {
+        None
+    };
+
+    let mut inherited_handles = Vec::with_capacity(3);
+    if let Some(stdin) = stdin_file.as_ref() {
+        inherited_handles.push(HANDLE(stdin.as_raw_handle()));
+    }
     if let Some(pipe) = stdout_pipe.as_ref() {
         inherited_handles.push(pipe.write_handle());
     }
@@ -297,6 +320,10 @@ pub fn spawn_cmd_session(
         let mut si = STARTUPINFOEXW::default();
         si.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
         si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdInput = stdin_file
+            .as_ref()
+            .map(|file| HANDLE(file.as_raw_handle()))
+            .unwrap_or_default();
         si.StartupInfo.hStdOutput = stdout_pipe
             .as_ref()
             .map(|p| p.write_handle())
@@ -307,7 +334,7 @@ pub fn spawn_cmd_session(
             .unwrap_or_default();
         si.lpAttributeList = attributes.list;
 
-        // `attributes` must stay alive until CreateProcessW returns.
+        // `attributes` and `stdin_file` must stay alive until CreateProcessW returns.
         let result = unsafe {
             CreateProcessW(
                 None,
@@ -330,6 +357,8 @@ pub fn spawn_cmd_session(
         return Err(format!("CreateProcessW: {}", e));
     }
 
+    // The child owns duplicated inherited handles now; parent copies can be released.
+    drop(stdin_file);
     if let Some(p) = stdout_pipe.as_mut() {
         p.close_write();
     }
@@ -414,5 +443,14 @@ mod tests {
             .read_to_string(&mut stdout)
             .expect("read stdout");
         assert!(stdout.contains("xchen-handle-list"), "stdout={stdout:?}");
+    }
+
+    #[test]
+    fn redirected_child_receives_valid_eof_stdin() {
+        let spawned = spawn_cmd_session(".", "set /p x= & exit /b 0", true, true)
+            .expect("spawn with NUL stdin");
+        let (exit_code, failed) = spawned.process.wait();
+        assert!(!failed, "process wait should succeed");
+        assert_eq!(exit_code, Some(0));
     }
 }
