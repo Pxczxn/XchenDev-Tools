@@ -12,17 +12,25 @@ fn associated_pids_or_unknown(pids: &[u32]) -> Vec<u32> {
     unique
 }
 
+fn normalize_protocol(protocol: &str) -> Result<String, String> {
+    let proto = protocol.trim().to_lowercase();
+    match proto.as_str() {
+        "tcp" | "udp" | "both" | "all" | "" => Ok(proto),
+        _ => Err("PORT_INVALID:仅支持 tcp、udp 或 both".to_string()),
+    }
+}
+
 pub fn inspect_port(protocol: &str, port: u16) -> Result<Vec<PortOccupancy>, String> {
     if port == 0 {
         return Err("PORT_INVALID:端口无效".to_string());
     }
-    let proto = protocol.to_lowercase();
+    let proto = normalize_protocol(protocol)?;
     let af = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
     let pf = match proto.as_str() {
         "tcp" => ProtocolFlags::TCP,
         "udp" => ProtocolFlags::UDP,
         "both" | "all" | "" => ProtocolFlags::TCP | ProtocolFlags::UDP,
-        _ => return Err("PORT_INVALID:仅支持 tcp、udp 或 both".to_string()),
+        _ => unreachable!("normalize_protocol only returns supported protocols"),
     };
     let filter_tcp = proto == "tcp" || proto == "both" || proto == "all" || proto.is_empty();
     let filter_udp = proto == "udp" || proto == "both" || proto == "all" || proto.is_empty();
@@ -108,5 +116,17 @@ mod tests {
     #[test]
     fn empty_associated_pids_keep_unknown_row() {
         assert_eq!(associated_pids_or_unknown(&[]), vec![0]);
+    }
+
+    #[test]
+    fn protocol_is_trimmed_and_normalized() {
+        assert_eq!(normalize_protocol(" TCP ").unwrap(), "tcp");
+        assert_eq!(normalize_protocol("Udp").unwrap(), "udp");
+        assert_eq!(normalize_protocol(" BOTH ").unwrap(), "both");
+    }
+
+    #[test]
+    fn unknown_protocol_is_rejected() {
+        assert!(normalize_protocol("http").is_err());
     }
 }
