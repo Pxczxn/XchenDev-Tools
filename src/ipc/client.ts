@@ -31,7 +31,7 @@ function parseError(err: unknown): { code: string; message: string } {
 }
 
 export async function listRuntimeItems(): Promise<RuntimeItem[]> {
-  return invoke("list_runtime_items");
+  return invoke("list_runtime_items_safe");
 }
 
 export async function listLaunchSessions(): Promise<LaunchSessionInfo[]> {
