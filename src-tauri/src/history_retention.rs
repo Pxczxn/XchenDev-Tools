@@ -5,9 +5,9 @@ use chrono::{DateTime, Duration, Utc};
 pub const MAX_AUDIT_EVENTS: usize = 200;
 pub const MAX_RECENT_ERRORS: usize = 50;
 
-fn timestamp_is_retained(timestamp: &str, cutoff: DateTime<Utc>) -> bool {
+fn timestamp_is_retained(timestamp: &str, cutoff: &DateTime<Utc>) -> bool {
     DateTime::parse_from_rfc3339(timestamp)
-        .map(|value| value.with_timezone(&Utc) >= cutoff)
+        .map(|value| value.with_timezone(&Utc) >= cutoff.clone())
         // Imported legacy records with malformed timestamps are kept rather than deleted blindly.
         .unwrap_or(true)
 }
@@ -25,10 +25,10 @@ pub fn prune_config_history(config: &mut AppConfig, now: DateTime<Utc>) {
 
     config
         .audit_events
-        .retain(|event| timestamp_is_retained(&event.timestamp, cutoff));
+        .retain(|event| timestamp_is_retained(&event.timestamp, &cutoff));
     config
         .recent_errors
-        .retain(|error| timestamp_is_retained(&error.timestamp, cutoff));
+        .retain(|error| timestamp_is_retained(&error.timestamp, &cutoff));
 
     trim_oldest(&mut config.audit_events, MAX_AUDIT_EVENTS);
     trim_oldest(&mut config.recent_errors, MAX_RECENT_ERRORS);
@@ -43,7 +43,7 @@ pub fn retained_audit_events(
     let cutoff = now - Duration::days(retention_days.max(1) as i64);
     let mut retained: Vec<_> = events
         .into_iter()
-        .filter(|event| timestamp_is_retained(&event.timestamp, cutoff))
+        .filter(|event| timestamp_is_retained(&event.timestamp, &cutoff))
         .collect();
     trim_oldest(&mut retained, limit.min(MAX_AUDIT_EVENTS));
     retained
@@ -58,7 +58,7 @@ pub fn retained_recent_errors(
     let cutoff = now - Duration::days(retention_days.max(1) as i64);
     let mut retained: Vec<_> = errors
         .into_iter()
-        .filter(|error| timestamp_is_retained(&error.timestamp, cutoff))
+        .filter(|error| timestamp_is_retained(&error.timestamp, &cutoff))
         .collect();
     trim_oldest(&mut retained, limit.min(MAX_RECENT_ERRORS));
     retained
@@ -67,7 +67,7 @@ pub fn retained_recent_errors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{OperationStatus, RecentError};
+    use crate::domain::OperationStatus;
 
     fn audit(timestamp: &str) -> AuditEvent {
         AuditEvent {
