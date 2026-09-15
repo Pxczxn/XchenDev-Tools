@@ -12,6 +12,7 @@ import type {
   RecentError,
   RuntimeItem,
   WindowsServiceInfo,
+  ServiceControlConfirmation,
   PortOccupancy,
   ProcessTerminationConfirmation,
   ProjectInfo,
@@ -43,12 +44,22 @@ export async function listManagedServices(): Promise<WindowsServiceInfo[]> {
   return invoke("list_managed_services");
 }
 
+export async function issueServiceControlConfirmation(
+  serviceName: string,
+  action: string,
+): Promise<ServiceControlConfirmation> {
+  return invoke("issue_service_control_confirmation_safe", {
+    serviceName,
+    action,
+  });
+}
+
 export async function controlWindowsService(args: {
   serviceName: string;
   action: string;
   confirmationToken: string;
 }): Promise<OperationResult> {
-  return invoke("control_windows_service", {
+  return invoke("control_windows_service_safe", {
     serviceName: args.serviceName,
     action: args.action,
     confirmationToken: args.confirmationToken,
