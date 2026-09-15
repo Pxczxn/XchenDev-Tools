@@ -129,10 +129,6 @@ export function ProjectsPage() {
     setLoading(false);
   }
 
-  async function refreshProjects() {
-    setProjects(await listProjects());
-  }
-
   useEffect(() => {
     let disposed = false;
 
@@ -262,9 +258,15 @@ export function ProjectsPage() {
     ) {
       return;
     }
+    const generation = projectContextGenerationRef.current;
+    const removingCurrentProject = projectId === project.project_id;
     try {
       await removeProject(project.project_id);
-      if (projectId === project.project_id) {
+      const savedProjects = await listProjects();
+      setProjects(savedProjects);
+      if (generation !== projectContextGenerationRef.current) return;
+
+      if (removingCurrentProject) {
         invalidateProjectContext();
         setRootPath("");
         setProjectId("");
@@ -272,10 +274,11 @@ export function ProjectsPage() {
         setProfiles([]);
         setSelected(null);
       }
-      await refreshProjects();
       setMessage("项目记录与启动配置已移除，磁盘文件未删除");
     } catch (e) {
-      setMessage(labelErrorText(String(e)));
+      if (generation === projectContextGenerationRef.current) {
+        setMessage(labelErrorText(String(e)));
+      }
     }
   }
 
