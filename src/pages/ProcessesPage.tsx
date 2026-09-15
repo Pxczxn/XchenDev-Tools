@@ -19,10 +19,16 @@ export function ProcessesPage() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  function changeRootPath(path: string) {
+    setRootPath(path);
+    setRows([]);
+    setMessage(null);
+  }
+
   async function pickDir() {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") {
-      setRootPath(selected);
+      changeRootPath(selected);
     }
   }
 
@@ -85,7 +91,7 @@ export function ProcessesPage() {
         <input
           className="env-path-input"
           value={rootPath}
-          onChange={(e) => setRootPath(e.target.value)}
+          onChange={(e) => changeRootPath(e.target.value)}
           placeholder="项目目录"
         />
         <button type="button" className="secondary" onClick={pickDir}>
