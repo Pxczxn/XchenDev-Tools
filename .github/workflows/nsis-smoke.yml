@@ -38,35 +38,30 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          import json
           from pathlib import Path
 
           path = Path("src-tauri/tauri.conf.json")
-          text = path.read_text(encoding="utf-8")
-          old = '''  "bundle": {
-            "active": true,
-            "targets": "all",
-            "icon": [
-              "icons/icon.ico"
-            ]
-          }'''.replace("          ", "")
-          new = '''  "bundle": {
-            "active": true,
-            "targets": ["nsis"],
-            "icon": [
-              "icons/icon.ico"
-            ],
-            "windows": {
+          data = json.loads(path.read_text(encoding="utf-8"))
+          bundle = data.get("bundle")
+          if not isinstance(bundle, dict):
+              raise SystemExit("bundle config is missing")
+          if bundle.get("targets") != "all":
+              raise SystemExit(f"expected bundle.targets='all', got {bundle.get('targets')!r}")
+
+          bundle["targets"] = ["nsis"]
+          bundle["windows"] = {
               "nsis": {
-                "installMode": "currentUser",
-                "languages": ["SimpChinese", "English"],
-                "displayLanguageSelector": true
+                  "installMode": "currentUser",
+                  "languages": ["SimpChinese", "English"],
+                  "displayLanguageSelector": True,
               }
-            }
-          }'''.replace("          ", "")
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f"expected one bundle block, found {count}")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+          }
+          path.write_text(
+              json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+              newline="\n",
+          )
           PY
 
       - name: Install frontend dependencies
