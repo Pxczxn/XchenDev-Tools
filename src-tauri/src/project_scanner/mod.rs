@@ -224,6 +224,7 @@ fn mark_conflicts(candidates: &mut [TechnologyCandidate]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn node_script_priority_prefers_dev_before_build() {
@@ -238,5 +239,46 @@ mod tests {
             preferred_node_scripts(&scripts),
             vec!["dev".to_string(), "start".to_string(), "serve".to_string()]
         );
+    }
+
+    #[test]
+    fn scans_frontend_and_backend_and_keeps_candidate_ids_stable() {
+        let root = tempdir().expect("tempdir");
+        let frontend = root.path().join("frontend");
+        let backend = root.path().join("backend");
+        fs::create_dir_all(&frontend).unwrap();
+        fs::create_dir_all(&backend).unwrap();
+        fs::write(
+            frontend.join("package.json"),
+            r#"{"scripts":{"build":"vite build","dev":"vite","test":"vitest"}}"#,
+        )
+        .unwrap();
+        fs::write(backend.join("pom.xml"), "<project></project>").unwrap();
+
+        let first = scan_project_directory(root.path().to_str().unwrap()).expect("first scan");
+        let second = scan_project_directory(root.path().to_str().unwrap()).expect("second scan");
+        assert_eq!(first.candidates.len(), 2);
+        assert_eq!(second.candidates.len(), 2);
+
+        let node = first
+            .candidates
+            .iter()
+            .find(|candidate| candidate.stack == TechnologyStack::Node)
+            .expect("node candidate");
+        assert_eq!(node.status, CandidateStatus::Ready);
+        assert_eq!(node.suggested_command.as_deref(), Some("npm run dev"));
+
+        let maven = first
+            .candidates
+            .iter()
+            .find(|candidate| candidate.stack == TechnologyStack::Maven)
+            .expect("maven candidate");
+        assert_eq!(maven.status, CandidateStatus::NeedsConfirmation);
+
+        let mut first_ids: Vec<_> = first.candidates.iter().map(|candidate| candidate.id.clone()).collect();
+        let mut second_ids: Vec<_> = second.candidates.iter().map(|candidate| candidate.id.clone()).collect();
+        first_ids.sort();
+        second_ids.sort();
+        assert_eq!(first_ids, second_ids);
     }
 }
