@@ -30,20 +30,31 @@ pub struct ProcessIdentityGuard;
 /// Keep the current process object alive while a PID-based operation is in flight.
 /// On Windows, a PID cannot be reused until all handles to the terminated process are closed.
 pub fn pin_process_identity(pid: u32) -> Result<ProcessIdentityGuard, String> {
-    if process_start_time_secs(pid).is_none() {
-        return Err("PROCESS_NOT_FOUND:进程不存在".to_string());
-    }
+    let start_time_before = process_start_time_secs(pid)
+        .ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
 
     #[cfg(windows)]
     {
         use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
             .map_err(|e| format!("TERMINATE_DENIED:无法锁定目标进程身份 {}", e))?;
-        Ok(ProcessIdentityGuard(handle))
+        let guard = ProcessIdentityGuard(handle);
+
+        // The PID can theoretically be reused between the sysinfo snapshot above and
+        // OpenProcess. Once the handle is open, reuse is blocked, so a second creation-time
+        // snapshot lets us reject that narrow race instead of pinning a replacement process.
+        let start_time_after = process_start_time_secs(pid)
+            .ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
+        if start_time_before != start_time_after {
+            return Err("PROCESS_SNAPSHOT_MISMATCH:进程身份已变化，请刷新".to_string());
+        }
+
+        Ok(guard)
     }
 
     #[cfg(not(windows))]
     {
+        let _ = start_time_before;
         Ok(ProcessIdentityGuard)
     }
 }
