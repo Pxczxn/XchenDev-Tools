@@ -28,6 +28,26 @@ fn display_path(path: &Path) -> String {
         .to_string()
 }
 
+fn validated_workdir_for_project(
+    state: &AppState,
+    project_id: &str,
+    working_directory: &str,
+) -> Result<String, String> {
+    let project = state
+        .config
+        .list_projects()
+        .into_iter()
+        .find(|project| project.project_id == project_id)
+        .ok_or_else(|| "PROJECT_NOT_FOUND:请先添加项目".to_string())?;
+
+    let project_root = canonical_directory(&project.root_path, "PROJECT_ROOT_INVALID")?;
+    let working_directory_path = canonical_directory(working_directory, "WORKDIR_INVALID")?;
+    if !working_directory_path.starts_with(&project_root) {
+        return Err("WORKDIR_OUTSIDE_PROJECT:工作目录必须位于当前项目根目录内".to_string());
+    }
+    Ok(display_path(&working_directory_path))
+}
+
 #[tauri::command]
 pub fn save_launch_profile_safe(
     state: State<'_, AppState>,
@@ -39,20 +59,8 @@ pub fn save_launch_profile_safe(
 ) -> Result<String, String> {
     let command = command.trim().to_string();
     security_guard::validate_command_policy(&command)?;
-
-    let project = state
-        .config
-        .list_projects()
-        .into_iter()
-        .find(|project| project.project_id == project_id)
-        .ok_or_else(|| "PROJECT_NOT_FOUND:请先添加项目".to_string())?;
-
-    let project_root = canonical_directory(&project.root_path, "PROJECT_ROOT_INVALID")?;
-    let working_directory_path = canonical_directory(&working_directory, "WORKDIR_INVALID")?;
-    if !working_directory_path.starts_with(&project_root) {
-        return Err("WORKDIR_OUTSIDE_PROJECT:工作目录必须位于当前项目根目录内".to_string());
-    }
-    let working_directory = display_path(&working_directory_path);
+    let working_directory =
+        validated_workdir_for_project(&state, &project_id, &working_directory)?;
 
     let role = match process_role.to_lowercase().as_str() {
         "frontend" => ProcessRole::Frontend,
@@ -151,6 +159,15 @@ pub fn start_launch_profile_safe(
         .config
         .get_profile(&profile_id)
         .ok_or_else(|| "PROFILE_NOT_FOUND:配置不存在".to_string())?;
+
+    // Imported or manually edited config is untrusted at the execution boundary.
+    security_guard::validate_command_policy(profile.command.trim())?;
+    let canonical_workdir = validated_workdir_for_project(
+        &state,
+        &profile.project_id,
+        &profile.working_directory,
+    )?;
+
     let role = match profile.process_role {
         ProcessRole::Frontend => "frontend",
         ProcessRole::Backend => "backend",
@@ -165,7 +182,7 @@ pub fn start_launch_profile_safe(
     state.command_runner.start(
         &app,
         &profile.profile_id,
-        &profile.working_directory,
-        &profile.command,
+        &canonical_workdir,
+        profile.command.trim(),
     )
 }
