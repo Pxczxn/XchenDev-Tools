@@ -170,7 +170,9 @@ fn normalize_import_content(content: &str) -> Result<String, String> {
 
 fn import_normalized(state: &AppState, content: &str) -> Result<(), String> {
     let normalized = normalize_import_content(content)?;
-    with_config_rollback(state, || state.config.import_json(&normalized))
+    with_config_rollback(state, || state.config.import_json(&normalized))?;
+    state.invalidate_env_detection_cache();
+    Ok(())
 }
 
 #[tauri::command]
