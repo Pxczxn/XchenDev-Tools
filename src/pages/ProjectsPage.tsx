@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "../components/PageHeader";
 import {
   issueLaunchConfirmation,
@@ -29,6 +29,10 @@ const ACTIVE_SESSION_STATES = new Set(["STARTING", "RUNNING", "STOPPING"]);
 type SessionsById = Record<string, LaunchSessionInfo>;
 type LogsBySessionId = Record<string, string[]>;
 type LastSessionByProfile = Record<string, string>;
+type TerminalEvent = {
+  exitCode?: number;
+  finalState?: string;
+};
 
 function indexSessions(sessions: LaunchSessionInfo[]): SessionsById {
   return Object.fromEntries(
@@ -56,6 +60,16 @@ function suggestedRole(candidate: TechnologyCandidate): "frontend" | "backend" {
   return candidate.stack.toUpperCase() === "NODE" ? "frontend" : "backend";
 }
 
+function terminalState(
+  event: TerminalEvent,
+  currentState?: string,
+): string {
+  if (currentState === "STOPPING") return "STOPPED";
+  if (event.finalState === "FAILED") return "FAILED";
+  if (event.exitCode !== undefined && event.exitCode !== 0) return "FAILED";
+  return event.finalState ?? "STOPPED";
+}
+
 function sessionBadgeClass(session: LaunchSessionInfo): string {
   if (ACTIVE_SESSION_STATES.has(session.state)) return "env-badge ok";
   if (session.state === "FAILED" || (session.exit_code ?? 0) !== 0) {
@@ -80,6 +94,7 @@ export function ProjectsPage() {
   const [logsBySessionId, setLogsBySessionId] = useState<LogsBySessionId>({});
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const terminalEventsRef = useRef<Record<string, TerminalEvent>>({});
 
   async function refreshProjects() {
     setProjects(await listProjects());
@@ -119,6 +134,11 @@ export function ProjectsPage() {
 
       if (!p.final) return;
 
+      terminalEventsRef.current[p.launchSessionId] = {
+        exitCode: p.exitCode,
+        finalState: p.finalState,
+      };
+
       setSessionsById((prev) => {
         const current = prev[p.launchSessionId];
         if (!current) return prev;
@@ -126,7 +146,10 @@ export function ProjectsPage() {
           ...prev,
           [p.launchSessionId]: {
             ...current,
-            state: p.finalState ?? "STOPPED",
+            state: terminalState(
+              terminalEventsRef.current[p.launchSessionId],
+              current.state,
+            ),
             exit_code: p.exitCode ?? current.exit_code,
           },
         };
@@ -264,9 +287,18 @@ export function ProjectsPage() {
         profile.profile_id,
         confirm.confirmation_token,
       );
+      const pendingTerminal = terminalEventsRef.current[info.launch_session_id];
+      const resolvedInfo = pendingTerminal
+        ? {
+            ...info,
+            state: terminalState(pendingTerminal, info.state),
+            exit_code: pendingTerminal.exitCode ?? info.exit_code,
+          }
+        : info;
+
       setSessionsById((prev) => ({
         ...prev,
-        [info.launch_session_id]: info,
+        [info.launch_session_id]: resolvedInfo,
       }));
       setLastSessionByProfile((prev) => ({
         ...prev,
@@ -274,9 +306,16 @@ export function ProjectsPage() {
       }));
       setLogsBySessionId((prev) => ({
         ...prev,
-        [info.launch_session_id]: [],
+        [info.launch_session_id]: prev[info.launch_session_id] ?? [],
       }));
-      setMessage(`会话已启动 PID ${info.pid ?? "?"}`);
+      if (pendingTerminal) {
+        delete terminalEventsRef.current[info.launch_session_id];
+      }
+      setMessage(
+        pendingTerminal
+          ? `会话已结束，退出码 ${pendingTerminal.exitCode ?? "?"}`
+          : `会话已启动 PID ${info.pid ?? "?"}`,
+      );
     } catch (e) {
       setMessage(labelErrorText(String(e)));
     }
