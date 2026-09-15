@@ -67,11 +67,9 @@ fn replace_file(
     let target_wide = wide(target);
 
     if backup_current {
-        // Keep exactly one last-known-good generation. Failure to remove an older
-        // backup is surfaced rather than silently losing the recovery guarantee.
-        if backup.exists() {
-            fs::remove_file(backup).map_err(|e| format!("CONFIG_BACKUP_FAILED:{}", e))?;
-        }
+        // ReplaceFileW replaces an existing backup path with the current target on success.
+        // Do not pre-delete the previous backup: if replacement fails before the API can
+        // establish the new backup, the last-known-good recovery point must remain intact.
         let backup_wide = wide(backup);
         unsafe {
             ReplaceFileW(
@@ -128,5 +126,24 @@ mod tests {
         atomic_write_with_backup(&path, b"second", true).expect("replace");
         assert_eq!(fs::read(&path).expect("read second"), b"second");
         assert_eq!(fs::read(backup_path(&path)).expect("read backup"), b"first");
+    }
+
+    #[test]
+    fn replacement_overwrites_existing_backup_with_previous_current() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+        let backup = backup_path(&path);
+
+        atomic_write_with_backup(&path, b"first", false).expect("first write");
+        fs::write(&backup, b"older-backup").expect("seed backup");
+
+        atomic_write_with_backup(&path, b"second", true).expect("replace with existing backup");
+
+        assert_eq!(fs::read(&path).expect("read current"), b"second");
+        assert_eq!(
+            fs::read(&backup).expect("read replaced backup"),
+            b"first",
+            "backup must track the previous valid current config"
+        );
     }
 }
