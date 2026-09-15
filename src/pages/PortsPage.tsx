@@ -3,7 +3,7 @@ import { PageHeader } from "../components/PageHeader";
 import {
   inspectPort,
   issueProcessTerminationConfirmation,
-  terminateProcess,
+  terminatePortProcess,
 } from "../ipc/client";
 import type { PortOccupancy } from "../ipc/types";
 import { formatDisplayPath } from "../lib/formatDisplay";
@@ -86,8 +86,11 @@ export function PortsPage() {
       const ok = window.confirm(`确认${force ? "强制" : ""}终止？\n${confirmation.binding_summary}`);
       if (!ok) return;
 
-      const result = await terminateProcess({
+      const result = await terminatePortProcess({
         pid: row.process.pid,
+        protocol: row.protocol,
+        port: row.port,
+        snapshotDigest: row.snapshot_digest,
         mode,
         confirmationToken: confirmation.confirmation_token,
         expectedName: row.process.name,
