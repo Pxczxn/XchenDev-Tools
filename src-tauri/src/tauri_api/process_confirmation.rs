@@ -30,6 +30,13 @@ pub fn issue_process_termination_confirmation_safe(
     expected_cwd: Option<String>,
 ) -> Result<ProcessTerminationConfirmation, String> {
     validate_mode(&mode)?;
+
+    // Pin the process object before collecting the confirmation snapshot. Without this guard,
+    // the target could exit between the summary and start-time reads and the PID could be reused,
+    // producing a mixed identity binding. Holding the handle keeps one stable process identity
+    // throughout snapshot validation and token issuance.
+    let _identity_guard = process_manager::pin_process_identity(pid)?;
+
     let summary = process_manager::find_process_summary(pid)
         .ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
     if !summary.name.eq_ignore_ascii_case(&expected_name) {
