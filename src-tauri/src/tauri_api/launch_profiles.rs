@@ -1,4 +1,5 @@
 use crate::app_state::AppState;
+use crate::config_transaction::with_config_rollback;
 use crate::domain::{
     LaunchProfile, LaunchSessionInfo, LaunchSessionState, OperationResult, ProcessRole,
 };
@@ -8,11 +9,9 @@ use std::sync::{Mutex, OnceLock};
 use tauri::State;
 use uuid::Uuid;
 
-use super::config_transaction::with_config_rollback;
-
 pub(crate) fn launch_lifecycle_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new(());
+    &LOCK
 }
 
 fn lock_launch_lifecycle() -> Result<std::sync::MutexGuard<'static, ()>, String> {
