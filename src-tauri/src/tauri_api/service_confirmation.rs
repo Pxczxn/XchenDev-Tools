@@ -16,6 +16,7 @@ use tauri::State;
 use uuid::Uuid;
 
 const SERVICE_CONFIRMATION_TTL_SECS: i64 = 60;
+const MAX_PENDING_SERVICE_CONFIRMATIONS: usize = 256;
 const SERVICE_STATE_TIMEOUT: Duration = Duration::from_secs(20);
 const SERVICE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -40,6 +41,21 @@ fn confirmations() -> &'static Mutex<HashMap<String, PendingServiceConfirmation>
 fn service_control_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn make_room_for_service_confirmation(
+    store: &mut HashMap<String, PendingServiceConfirmation>,
+) {
+    while !store.is_empty() && store.len() >= MAX_PENDING_SERVICE_CONFIRMATIONS {
+        let oldest = store
+            .iter()
+            .min_by_key(|(_, item)| item.created_at.timestamp_millis())
+            .map(|(token, _)| token.clone());
+        let Some(token) = oldest else {
+            break;
+        };
+        store.remove(&token);
+    }
 }
 
 fn normalize_action(action: &str) -> Result<String, String> {
@@ -170,6 +186,7 @@ pub fn issue_service_control_confirmation_safe(
             .num_seconds();
         age >= 0 && age <= SERVICE_CONFIRMATION_TTL_SECS
     });
+    make_room_for_service_confirmation(&mut store);
     store.insert(token.clone(), pending);
 
     Ok(ServiceControlConfirmation {
@@ -295,6 +312,24 @@ mod tests {
         let stopped = service(WindowsServiceStatus::Stopped);
         assert_ne!(binding_digest(&running, "stop"), binding_digest(&running, "start"));
         assert_ne!(binding_digest(&running, "stop"), binding_digest(&stopped, "stop"));
+    }
+
+    #[test]
+    fn pending_service_confirmation_limit_evicts_oldest() {
+        let now = Utc::now();
+        let mut store = HashMap::new();
+        for index in 0..MAX_PENDING_SERVICE_CONFIRMATIONS {
+            store.insert(
+                format!("token-{index}"),
+                PendingServiceConfirmation {
+                    binding_digest: format!("digest-{index}"),
+                    created_at: now + ChronoDuration::milliseconds(index as i64),
+                },
+            );
+        }
+        make_room_for_service_confirmation(&mut store);
+        assert_eq!(store.len(), MAX_PENDING_SERVICE_CONFIRMATIONS - 1);
+        assert!(!store.contains_key("token-0"));
     }
 
     #[test]
