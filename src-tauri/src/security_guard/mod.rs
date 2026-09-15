@@ -122,25 +122,63 @@ fn fs_canonical(p: &Path) -> Result<std::path::PathBuf, String> {
 }
 
 pub fn directory_matches_prefix(cwd: &str, root: &std::path::Path) -> Option<u8> {
-    let cwd_path = match fs_canonical(Path::new(cwd)) {
-        Ok(p) => p,
-        Err(_) => return None,
-    };
-    let root_str = root.to_string_lossy().to_lowercase();
-    let cwd_str = cwd_path.to_string_lossy().to_lowercase();
-    if cwd_str == root_str {
+    let cwd_path = fs_canonical(Path::new(cwd)).ok()?;
+
+    if cwd_path == root {
         return Some(1);
     }
-    if cwd_str.starts_with(root_str.trim_end_matches('\\')) {
-        let rel = cwd_str.strip_prefix(root_str.trim_end_matches('\\')).unwrap_or("");
-        let rel = rel.trim_start_matches('\\');
-        if rel.is_empty() {
-            return Some(1);
-        }
-        let depth = rel.split('\\').filter(|s| !s.is_empty()).count();
-        if depth <= 1 {
-            return Some(2);
-        }
+
+    // Use path components instead of string prefix matching. This prevents a root such as
+    // `C:\work\foo` from matching the unrelated sibling `C:\work\foobar`.
+    let relative = cwd_path.strip_prefix(root).ok()?;
+    let depth = relative.components().count();
+    if depth == 1 {
+        Some(2)
+    } else {
+        None
     }
-    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn directory_match_accepts_root_and_one_child_only() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("foo");
+        let child = root.join("child");
+        let grandchild = child.join("grandchild");
+        std::fs::create_dir_all(&grandchild).expect("dirs");
+        let canonical_root = std::fs::canonicalize(&root).expect("canonical root");
+
+        assert_eq!(
+            directory_matches_prefix(root.to_str().expect("root"), &canonical_root),
+            Some(1)
+        );
+        assert_eq!(
+            directory_matches_prefix(child.to_str().expect("child"), &canonical_root),
+            Some(2)
+        );
+        assert_eq!(
+            directory_matches_prefix(grandchild.to_str().expect("grandchild"), &canonical_root),
+            None
+        );
+    }
+
+    #[test]
+    fn directory_match_rejects_sibling_with_same_string_prefix() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("foo");
+        let sibling = temp.path().join("foobar");
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::create_dir_all(&sibling).expect("sibling");
+        let canonical_root = std::fs::canonicalize(&root).expect("canonical root");
+
+        assert_eq!(
+            directory_matches_prefix(sibling.to_str().expect("sibling"), &canonical_root),
+            None
+        );
+    }
 }
