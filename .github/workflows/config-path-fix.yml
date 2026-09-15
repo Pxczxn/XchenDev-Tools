@@ -34,7 +34,7 @@ jobs:
           replace_exact(
               "src-tauri/src/config_store/mod.rs",
               '''/// 默认：应用同目录下的 `config/config.json`。\n/// `tauri dev` 时解析到仓库根目录的 `config/`（可执行文件在 `src-tauri/target/*/debug`）。''',
-              '''/// 默认配置位置：\n/// - 开发态（`tauri dev` / 仓库 target）：仓库根目录 `config/config.json`；\n/// - 安装态：`%LOCALAPPDATA%\\XchenDev-Tools\\config\\config.json`。\n/// `XCHEN_CONFIG_FILE`、`XCHEN_CONFIG_DIR`、`XCHEN_TOOLS_HOME` 可显式覆盖默认位置。''',
+              '''/// 默认配置位置：\n/// - 开发态（`tauri dev` / 仓库 target）：仓库根目录 `config/config.json`；\n/// - 安装态：`%LOCALAPPDATA%\\XchenDev-Tools\\config\\config.json`。\n///\n/// `XCHEN_CONFIG_FILE`、`XCHEN_CONFIG_DIR`、`XCHEN_TOOLS_HOME` 可显式覆盖默认位置。''',
           )
 
           replace_exact(
