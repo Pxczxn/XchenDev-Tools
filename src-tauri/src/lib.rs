@@ -24,7 +24,6 @@ pub fn run() {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             health_check,
-            list_runtime_items,
             list_runtime_items_safe,
             list_environment_candidates,
             save_manual_override,
@@ -33,12 +32,9 @@ pub fn run() {
             inspect_directory_processes,
             terminate_directory_process,
             scan_project_directory,
-            save_launch_profile,
             save_launch_profile_safe,
             list_launch_profiles,
-            issue_launch_confirmation,
             issue_launch_confirmation_safe,
-            start_launch_profile,
             start_launch_profile_safe,
             stop_launch_session,
             project_id_for_path,
