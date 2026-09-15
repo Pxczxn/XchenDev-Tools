@@ -25,6 +25,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             health_check,
             list_runtime_items,
+            list_runtime_items_safe,
             list_environment_candidates,
             save_manual_override,
             inspect_port,
