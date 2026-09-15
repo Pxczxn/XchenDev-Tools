@@ -307,6 +307,26 @@ export function ProjectsPage() {
     if (!window.confirm(`移除这条启动配置？\n\n${profile.command}`)) return;
     try {
       await removeLaunchProfile(profile.profile_id);
+      const lastSessionId = lastSessionByProfileRef.current[profile.profile_id];
+      const nextLastSessions = { ...lastSessionByProfileRef.current };
+      delete nextLastSessions[profile.profile_id];
+      lastSessionByProfileRef.current = nextLastSessions;
+      setLastSessionByProfile(nextLastSessions);
+
+      if (lastSessionId) {
+        setSessionsById((prev) => {
+          const next = { ...prev };
+          delete next[lastSessionId];
+          return next;
+        });
+        setLogsBySessionId((prev) => {
+          const next = { ...prev };
+          delete next[lastSessionId];
+          return next;
+        });
+        delete terminalEventsRef.current[lastSessionId];
+      }
+
       setProfiles(await listLaunchProfiles(profile.project_id));
       setMessage("启动配置已移除");
     } catch (e) {
