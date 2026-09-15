@@ -60,6 +60,9 @@ fn normalize_map(
         if !allowed.contains(key.as_str()) {
             return Err(invalid(format!("{} 包含不支持的键 {}", field, raw_key)));
         }
+        if out.contains_key(&key) {
+            return Err(invalid(format!("{} 规范化后包含重复键 {}", field, key)));
+        }
         let value = clean_text(raw_value, field)?;
         out.insert(key, value);
     }
@@ -168,6 +171,18 @@ mod tests {
         settings
             .managed_service_name_hints
             .insert("mysql".to_string(), "MySQL80\nInjected".to_string());
+        assert!(normalize_settings(settings).is_err());
+    }
+
+    #[test]
+    fn rejects_case_insensitive_duplicate_map_keys() {
+        let mut settings = AppSettings::default();
+        settings
+            .detection_path_hints
+            .insert("NODE".to_string(), "C:\\node-a.exe".to_string());
+        settings
+            .detection_path_hints
+            .insert("node".to_string(), "C:\\node-b.exe".to_string());
         assert!(normalize_settings(settings).is_err());
     }
 }
