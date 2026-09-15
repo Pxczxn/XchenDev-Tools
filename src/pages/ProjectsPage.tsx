@@ -582,11 +582,16 @@ export function ProjectsPage() {
             <h3>我的项目</h3>
             <span className="card-meta">{projects.length} 个</span>
           </div>
-          <div className="card-body env-candidate-list">
+          <div className="card-body project-grid">
             {projects.map((project) => (
-              <div key={project.project_id} className="env-candidate">
+              <div
+                key={project.project_id}
+                className={`env-candidate project-card ${
+                  projectId === project.project_id ? "active" : ""
+                }`}
+              >
                 <div className="env-candidate-head">
-                  <span className="env-tag">{project.name}</span>
+                  <span className="project-name">{project.name}</span>
                   {projectId === project.project_id && (
                     <span className="env-badge ok">当前项目</span>
                   )}
@@ -612,7 +617,8 @@ export function ProjectsPage() {
         </div>
       )}
 
-      <div className="card toolbar-card env-toolbar">
+      <div className="card toolbar-card env-toolbar project-toolbar">
+        <div className="project-toolbar-label">项目路径</div>
         <input
           className="env-path-input"
           value={rootPath}
@@ -643,9 +649,9 @@ export function ProjectsPage() {
       )}
 
       {candidates.length > 0 && (
-        <div className="env-candidate-list">
+        <div className="project-stack-grid">
           {candidates.map((c) => (
-            <div key={c.id} className="env-candidate">
+            <div key={c.id} className="env-candidate project-stack-card">
               <div className="env-candidate-head">
                 <span className="env-tag">{labelStatus(c.stack)}</span>
                 <span
@@ -680,7 +686,7 @@ export function ProjectsPage() {
       )}
 
       {selected && (
-        <div className="card">
+        <div className="card project-config-card">
           <div className="card-header">
             <h3>启动配置</h3>
           </div>
@@ -713,7 +719,7 @@ export function ProjectsPage() {
       )}
 
       {profiles.length > 0 && (
-        <div className="card">
+        <div className="card project-runtime-card">
           <div className="card-header">
             <h3>已保存配置</h3>
             <div className="project-runtime-actions">
@@ -752,7 +758,7 @@ export function ProjectsPage() {
               </button>
             </div>
           </div>
-          <div className="card-body env-candidate-list">
+          <div className="card-body project-profile-list">
             {profiles.map((profile) => {
               const activeSession = activeSessionForProfile(
                 sessionsById,
@@ -766,7 +772,7 @@ export function ProjectsPage() {
                 : [];
 
               return (
-                <div key={profile.profile_id} className="env-candidate">
+                <div key={profile.profile_id} className="env-candidate project-profile-card">
                   <div className="env-candidate-head">
                     <span className="env-badge muted">
                       {labelStatus(profile.process_role)}
@@ -821,7 +827,7 @@ export function ProjectsPage() {
                     )}
                   </div>
                   {displaySession && (
-                    <div className="log-panel">
+                    <div className="log-panel project-log-panel">
                       {sessionLogs.join("\n") || "暂无输出"}
                     </div>
                   )}
