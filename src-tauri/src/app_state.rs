@@ -1,6 +1,7 @@
 use crate::command_runner::CommandRunnerState;
 use crate::config_store::ConfigStore;
 use crate::domain::EnvironmentCandidate;
+use crate::process_manager;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -11,6 +12,7 @@ use uuid::Uuid;
 
 const ENV_DETECTION_CACHE_TTL: Duration = Duration::from_secs(120);
 pub const LAUNCH_CONFIRMATION_TTL_SECS: i64 = 120;
+pub const PROCESS_CONFIRMATION_TTL_SECS: i64 = 60;
 
 #[derive(Clone)]
 struct EnvironmentDetectionCache {
@@ -24,6 +26,7 @@ pub struct AppState {
     pub config: ConfigStore,
     pub command_runner: CommandRunnerState,
     confirmations: Mutex<HashMap<String, PendingConfirmation>>,
+    process_confirmations: Mutex<HashMap<String, PendingProcessConfirmation>>,
     env_detection_cache: Mutex<Option<EnvironmentDetectionCache>>,
 }
 
@@ -36,12 +39,19 @@ pub struct PendingConfirmation {
     pub consumed: bool,
 }
 
+#[derive(Clone)]
+struct PendingProcessConfirmation {
+    binding_digest: String,
+    created_at: DateTime<Utc>,
+}
+
 impl AppState {
     pub fn new() -> Self {
         Self {
             config: ConfigStore::new(),
             command_runner: CommandRunnerState::new(),
             confirmations: Mutex::new(HashMap::new()),
+            process_confirmations: Mutex::new(HashMap::new()),
             env_detection_cache: Mutex::new(None),
         }
     }
@@ -173,6 +183,128 @@ impl AppState {
         map.remove(token);
         Ok(())
     }
+
+    pub fn issue_process_confirmation(
+        &self,
+        pid: u32,
+        expected_name: &str,
+        expected_cwd: Option<&str>,
+        mode: &str,
+    ) -> Result<(String, String), String> {
+        let summary = process_manager::find_process_summary(pid)
+            .ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
+        if !summary.name.eq_ignore_ascii_case(expected_name) {
+            return Err("PROCESS_SNAPSHOT_MISMATCH:进程名不匹配".to_string());
+        }
+        if let Some(expected) = expected_cwd {
+            match summary.working_directory.as_deref() {
+                Some(actual) if actual.eq_ignore_ascii_case(expected) => {}
+                _ => return Err("PROCESS_SNAPSHOT_MISMATCH:工作目录不匹配".to_string()),
+            }
+        }
+        let start_time = process_manager::process_start_time_secs(pid)
+            .ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
+        let binding_digest = process_confirmation_digest(
+            pid,
+            start_time,
+            &summary.name,
+            summary.working_directory.as_deref(),
+            mode,
+        );
+        let token = Uuid::new_v4().to_string();
+        let pending = PendingProcessConfirmation {
+            binding_digest,
+            created_at: Utc::now(),
+        };
+        let mut map = self
+            .process_confirmations
+            .lock()
+            .map_err(|_| "PROCESS_CONFIRMATION_ISSUE_FAILED:确认锁失败".to_string())?;
+        map.retain(|_, item| {
+            let age = Utc::now()
+                .signed_duration_since(item.created_at)
+                .num_seconds();
+            age >= 0 && age <= PROCESS_CONFIRMATION_TTL_SECS
+        });
+        map.insert(token.clone(), pending);
+        let action = if mode.eq_ignore_ascii_case("force") {
+            "强制终止"
+        } else {
+            "终止"
+        };
+        Ok((token, format!("{} PID {} ({})", action, pid, summary.name)))
+    }
+
+    pub fn consume_process_confirmation(
+        &self,
+        token: &str,
+        pid: u32,
+        expected_name: &str,
+        expected_cwd: Option<&str>,
+        mode: &str,
+    ) -> Result<(), String> {
+        let pending = {
+            let mut map = self
+                .process_confirmations
+                .lock()
+                .map_err(|_| "PROCESS_CONFIRMATION_REQUIRED:确认无效".to_string())?;
+            let pending = map
+                .remove(token)
+                .ok_or_else(|| "PROCESS_CONFIRMATION_REQUIRED:确认令牌不存在".to_string())?;
+            let age = Utc::now()
+                .signed_duration_since(pending.created_at)
+                .num_seconds();
+            if age < 0 || age > PROCESS_CONFIRMATION_TTL_SECS {
+                return Err("PROCESS_CONFIRMATION_REQUIRED:确认令牌无效或已过期".to_string());
+            }
+            pending
+        };
+
+        let summary = process_manager::find_process_summary(pid)
+            .ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
+        if !summary.name.eq_ignore_ascii_case(expected_name) {
+            return Err("PROCESS_SNAPSHOT_MISMATCH:进程名不匹配".to_string());
+        }
+        if let Some(expected) = expected_cwd {
+            match summary.working_directory.as_deref() {
+                Some(actual) if actual.eq_ignore_ascii_case(expected) => {}
+                _ => return Err("PROCESS_SNAPSHOT_MISMATCH:工作目录不匹配".to_string()),
+            }
+        }
+        let start_time = process_manager::process_start_time_secs(pid)
+            .ok_or_else(|| "PROCESS_NOT_FOUND:进程不存在".to_string())?;
+        let current_digest = process_confirmation_digest(
+            pid,
+            start_time,
+            &summary.name,
+            summary.working_directory.as_deref(),
+            mode,
+        );
+        if current_digest != pending.binding_digest {
+            return Err("PROCESS_CONFIRMATION_REQUIRED:目标进程已变化，请重新确认".to_string());
+        }
+        Ok(())
+    }
+}
+
+fn process_confirmation_digest(
+    pid: u32,
+    start_time: u64,
+    name: &str,
+    cwd: Option<&str>,
+    mode: &str,
+) -> String {
+    let binding = format!(
+        "{}|{}|{}|{}|{}",
+        pid,
+        start_time,
+        name.to_lowercase(),
+        cwd.unwrap_or("").to_lowercase(),
+        mode.to_lowercase()
+    );
+    let mut hasher = Sha256::new();
+    hasher.update(binding.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 #[cfg(test)]
@@ -191,5 +323,14 @@ mod tests {
         assert!(state
             .consume_confirmation(&token, "p", "echo ok", ".", "frontend")
             .is_err());
+    }
+
+    #[test]
+    fn process_confirmation_digest_binds_identity_and_mode() {
+        let normal = process_confirmation_digest(42, 100, "node.exe", Some("C:\\work"), "normal");
+        let force = process_confirmation_digest(42, 100, "node.exe", Some("C:\\work"), "force");
+        let reused = process_confirmation_digest(42, 101, "node.exe", Some("C:\\work"), "normal");
+        assert_ne!(normal, force);
+        assert_ne!(normal, reused);
     }
 }
