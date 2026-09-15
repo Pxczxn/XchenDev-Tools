@@ -318,14 +318,31 @@ fn preferred_node_scripts(scripts: &[String]) -> Vec<String> {
 
 fn mark_conflicts(candidates: &mut [TechnologyCandidate]) {
     use std::collections::HashMap;
-    let mut by_dir: HashMap<String, usize> = HashMap::new();
-    for c in candidates.iter() {
-        *by_dir.entry(c.directory.clone()).or_insert(0) += 1;
+
+    let mut java_builds_by_dir: HashMap<String, (bool, bool)> = HashMap::new();
+    for candidate in candidates.iter() {
+        let entry = java_builds_by_dir
+            .entry(candidate.directory.to_lowercase())
+            .or_insert((false, false));
+        match candidate.stack {
+            TechnologyStack::Maven => entry.0 = true,
+            TechnologyStack::Gradle => entry.1 = true,
+            _ => {}
+        }
     }
-    for c in candidates.iter_mut() {
-        if by_dir.get(&c.directory).copied().unwrap_or(0) > 1 {
-            c.status = CandidateStatus::Conflict;
-            c.conflict_group = Some(format!("multi-stack-{}", c.directory));
+
+    for candidate in candidates.iter_mut() {
+        let Some((has_maven, has_gradle)) =
+            java_builds_by_dir.get(&candidate.directory.to_lowercase()).copied()
+        else {
+            continue;
+        };
+        if has_maven
+            && has_gradle
+            && matches!(candidate.stack, TechnologyStack::Maven | TechnologyStack::Gradle)
+        {
+            candidate.status = CandidateStatus::Conflict;
+            candidate.conflict_group = Some(format!("java-build-system-{}", candidate.directory));
         }
     }
 }
@@ -499,6 +516,61 @@ mod tests {
         assert_eq!(result.candidates[0].stack, TechnologyStack::Python);
         assert_eq!(result.candidates[0].status, CandidateStatus::EvidenceOnly);
         assert!(result.candidates[0].conflict_group.is_none());
+    }
+
+    #[test]
+    fn node_and_rust_same_directory_are_not_forced_to_conflict() {
+        let root = tempdir().expect("tempdir");
+        fs::create_dir_all(root.path().join("src")).expect("src");
+        fs::write(
+            root.path().join("package.json"),
+            r#"{"scripts":{"dev":"vite"}}"#,
+        )
+        .expect("package");
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname='desktop'\nversion='0.1.0'\n",
+        )
+        .expect("cargo");
+        fs::write(root.path().join("src").join("main.rs"), "fn main() {}\n").expect("main");
+
+        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        assert_eq!(result.candidates.len(), 2);
+        let node = result
+            .candidates
+            .iter()
+            .find(|candidate| candidate.stack == TechnologyStack::Node)
+            .expect("node candidate");
+        let rust = result
+            .candidates
+            .iter()
+            .find(|candidate| candidate.stack == TechnologyStack::Rust)
+            .expect("rust candidate");
+        assert_eq!(node.status, CandidateStatus::Ready);
+        assert_eq!(rust.status, CandidateStatus::NeedsConfirmation);
+        assert!(node.conflict_group.is_none());
+        assert!(rust.conflict_group.is_none());
+    }
+
+    #[test]
+    fn maven_and_gradle_same_directory_are_conflict() {
+        let root = tempdir().expect("tempdir");
+        fs::write(
+            root.path().join("pom.xml"),
+            "<project><packaging>jar</packaging></project>",
+        )
+        .expect("pom");
+        fs::write(root.path().join("build.gradle"), "plugins { id 'java' }").expect("gradle");
+
+        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        assert_eq!(result.candidates.len(), 2);
+        for candidate in &result.candidates {
+            assert_eq!(candidate.status, CandidateStatus::Conflict);
+            assert!(candidate
+                .conflict_group
+                .as_deref()
+                .is_some_and(|group| group.starts_with("java-build-system-")));
+        }
     }
 
     #[test]
