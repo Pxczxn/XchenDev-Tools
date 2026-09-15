@@ -44,3 +44,23 @@
   --radius-lg: var(--sh-radius);
   --radius-xl: calc(var(--sh-radius) + 4px);
 }
+
+/* Scoped replacement for the small part of Tailwind Preflight shadcn relies on.
+   Existing non-shadcn pages keep their legacy base styles unchanged. */
+@layer base {
+  button[data-slot="button"],
+  input[data-slot="input"] {
+    font: inherit;
+  }
+
+  button[data-slot="button"] {
+    appearance: none;
+    border: 0;
+    margin: 0;
+    cursor: pointer;
+  }
+
+  [data-slot="card"] pre {
+    margin: 0;
+  }
+}
