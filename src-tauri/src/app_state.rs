@@ -66,6 +66,12 @@ fn make_room_for_pending<T, F>(
     }
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         Self {
@@ -161,7 +167,7 @@ impl AppState {
             let age = Utc::now()
                 .signed_duration_since(item.created_at)
                 .num_seconds();
-            !item.consumed && age >= 0 && age <= LAUNCH_CONFIRMATION_TTL_SECS
+            !item.consumed && (0..=LAUNCH_CONFIRMATION_TTL_SECS).contains(&age)
         });
         make_room_for_pending(
             &mut confirmations,
@@ -197,8 +203,7 @@ impl AppState {
             .signed_duration_since(pending.created_at)
             .num_seconds();
         if pending.consumed
-            || age_seconds < 0
-            || age_seconds > LAUNCH_CONFIRMATION_TTL_SECS
+            || !(0..=LAUNCH_CONFIRMATION_TTL_SECS).contains(&age_seconds)
             || pending.profile_id != profile_id
             || pending.binding_digest != digest
         {
@@ -249,7 +254,7 @@ impl AppState {
             let age = Utc::now()
                 .signed_duration_since(item.created_at)
                 .num_seconds();
-            age >= 0 && age <= PROCESS_CONFIRMATION_TTL_SECS
+            (0..=PROCESS_CONFIRMATION_TTL_SECS).contains(&age)
         });
         make_room_for_pending(&mut map, MAX_PENDING_PROCESS_CONFIRMATIONS, |item| {
             item.created_at.timestamp_millis()
@@ -282,7 +287,7 @@ impl AppState {
             let age = Utc::now()
                 .signed_duration_since(pending.created_at)
                 .num_seconds();
-            if age < 0 || age > PROCESS_CONFIRMATION_TTL_SECS {
+            if !(0..=PROCESS_CONFIRMATION_TTL_SECS).contains(&age) {
                 return Err("PROCESS_CONFIRMATION_REQUIRED:确认令牌无效或已过期".to_string());
             }
             pending
