@@ -42,6 +42,15 @@ fn role_key(role: &ProcessRole) -> &'static str {
     }
 }
 
+fn logical_workdir_key(path: &str) -> String {
+    let normalized = path.trim().replace('/', "\\");
+    let without_extended_prefix = normalized
+        .strip_prefix(r"\\?\")
+        .unwrap_or(normalized.as_str());
+    let without_trailing_separators = without_extended_prefix.trim_end_matches('\\');
+    without_trailing_separators.to_lowercase()
+}
+
 fn validate_import_profiles(config: &AppConfig) -> Result<(), String> {
     let mut slots = HashSet::new();
     let mut candidates = HashSet::new();
@@ -49,11 +58,19 @@ fn validate_import_profiles(config: &AppConfig) -> Result<(), String> {
     for profile in &config.launch_profiles {
         security_guard::validate_command_policy(profile.command.trim())?;
 
+        let workdir_key = logical_workdir_key(&profile.working_directory);
+        if workdir_key.is_empty() {
+            return Err(format!(
+                "PROFILE_INVALID:启动配置 {} 的工作目录不能为空",
+                profile.profile_id
+            ));
+        }
+
         let slot = format!(
             "{}|{}|{}",
             profile.project_id,
             role_key(&profile.process_role),
-            profile.working_directory.trim().to_lowercase()
+            workdir_key
         );
         if !slots.insert(slot) {
             return Err(format!(
@@ -191,6 +208,56 @@ mod tests {
         let err = normalize_import_content(&json).expect_err("duplicate slot must fail");
         assert!(err.contains("PROFILE_INVALID"));
         assert!(err.contains("重复"));
+    }
+
+    #[test]
+    fn import_rejects_duplicate_slot_with_separator_variants() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config
+            .launch_profiles
+            .push(profile("profile-a", "C:\\demo\\web", Some("candidate-a")));
+        config
+            .launch_profiles
+            .push(profile("profile-b", "C:/demo/web/", Some("candidate-b")));
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json)
+            .expect_err("slash and trailing-separator variants must be the same slot");
+        assert!(err.contains("PROFILE_INVALID"));
+        assert!(err.contains("重复"));
+    }
+
+    #[test]
+    fn import_rejects_duplicate_slot_with_extended_path_prefix() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config
+            .launch_profiles
+            .push(profile("profile-a", "C:\\demo\\web", Some("candidate-a")));
+        config
+            .launch_profiles
+            .push(profile("profile-b", r"\\?\C:\demo\web\", Some("candidate-b")));
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json)
+            .expect_err("extended path prefix must not create a duplicate slot");
+        assert!(err.contains("PROFILE_INVALID"));
+        assert!(err.contains("重复"));
+    }
+
+    #[test]
+    fn import_rejects_empty_working_directory() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config
+            .launch_profiles
+            .push(profile("profile-a", "   ", Some("candidate-a")));
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("empty workdir must fail");
+        assert!(err.contains("PROFILE_INVALID"));
+        assert!(err.contains("工作目录不能为空"));
     }
 
     #[test]
