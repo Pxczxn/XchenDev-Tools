@@ -13,10 +13,18 @@ new = '''# TypeScript alias used by shadcn generated components. Keep JSONC comm
 replace_exact(
     "tsconfig.json",
     '    /* Linting */\\n    "strict": true,',
-    '    "baseUrl": ".",\\n    "paths": {\\n      "@/*": ["./src/*"]\\n    },\\n\\n    /* Linting */\\n    "strict": true,',
+    '    "paths": {\\n      "@/*": ["./src/*"]\\n    },\\n\\n    /* Linting */\\n    "strict": true,',
 )
 '''
 count = text.count(old)
 if count != 1:
     raise SystemExit(f"expected one JSONC block, found {count}")
-path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+text = text.replace(old, new, 1)
+
+old_vite = 'path.resolve(__dirname, "./src")'
+new_vite = 'path.resolve(import.meta.dirname, "./src")'
+if text.count(old_vite) != 1:
+    raise SystemExit(f"expected one Vite dirname marker, found {text.count(old_vite)}")
+text = text.replace(old_vite, new_vite, 1)
+
+path.write_text(text, encoding="utf-8", newline="\n")
