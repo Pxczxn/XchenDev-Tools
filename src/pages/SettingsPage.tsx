@@ -141,7 +141,9 @@ export function SettingsPage() {
         managed_service_name_hints: serviceHints,
       };
       const result = await saveAppSettings(next);
-      setSettings(next);
+      if (result.status === "SUCCEEDED") {
+        await reloadSettingsFromConfig();
+      }
       setMessage(
         formatOperationMessage(result.status, result.message, result.reason_code),
       );
