@@ -3,6 +3,7 @@ import { useState } from "react";
 import { PageHeader } from "../components/PageHeader";
 import {
   inspectDirectoryProcesses,
+  issueProcessTerminationConfirmation,
   terminateDirectoryProcess,
 } from "../ipc/client";
 import type { DirectoryProcessMatch } from "../ipc/types";
@@ -42,15 +43,22 @@ export function ProcessesPage() {
 
   async function onTerminate(row: DirectoryProcessMatch, force: boolean) {
     if (row.protection.is_protected) return;
-    const ok = window.confirm(`确认终止 ${row.name} (PID ${row.pid})？`);
-    if (!ok) return;
-    const token = crypto.randomUUID();
+    const mode = force ? "force" : "normal";
     try {
+      const confirmation = await issueProcessTerminationConfirmation({
+        pid: row.pid,
+        mode,
+        expectedName: row.name,
+        expectedCwd: row.working_directory,
+      });
+      const ok = window.confirm(`确认${force ? "强制" : ""}终止？\n${confirmation.binding_summary}`);
+      if (!ok) return;
+
       const result = await terminateDirectoryProcess({
         pid: row.pid,
         snapshotDigest: row.snapshot_digest,
-        mode: force ? "force" : "normal",
-        confirmationToken: token,
+        mode,
+        confirmationToken: confirmation.confirmation_token,
         expectedName: row.name,
         expectedCwd: row.working_directory,
       });
@@ -131,6 +139,14 @@ export function ProcessesPage() {
                   onClick={() => onTerminate(r, false)}
                 >
                   终止
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={r.protection.is_protected}
+                  onClick={() => onTerminate(r, true)}
+                >
+                  强制终止
                 </button>
               </div>
             </div>
