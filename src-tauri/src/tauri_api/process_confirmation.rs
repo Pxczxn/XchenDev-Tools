@@ -90,10 +90,6 @@ pub fn issue_process_termination_confirmation_safe(
 ) -> Result<ProcessTerminationConfirmation, String> {
     validate_mode(&mode)?;
 
-    // Pin the process object before collecting the confirmation snapshot. Without this guard,
-    // the target could exit between the summary and start-time reads and the PID could be reused,
-    // producing a mixed identity binding. Holding the handle keeps one stable process identity
-    // throughout snapshot validation and token issuance.
     let _identity_guard = process_manager::pin_process_identity(pid)?;
 
     let summary = process_manager::find_process_summary(pid)
@@ -133,10 +129,6 @@ pub fn terminate_process_safe(
 ) -> Result<OperationResult, String> {
     validate_mode(&mode)?;
 
-    // Pin the current Windows process object before consuming the confirmation token.
-    // If the original process has already exited and the PID was reused, the token's
-    // creation-time binding below rejects the replacement. If it exits after this point,
-    // keeping the handle alive prevents the PID from being reused until this operation ends.
     let _identity_guard = process_manager::pin_process_identity(pid)?;
 
     state.consume_process_confirmation(
@@ -161,6 +153,7 @@ pub fn terminate_process_safe(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Flat Tauri IPC contract; grouping would break the frontend command payload.
 pub fn terminate_port_process_safe(
     state: State<'_, AppState>,
     pid: u32,
