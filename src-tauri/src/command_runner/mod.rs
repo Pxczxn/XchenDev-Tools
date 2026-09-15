@@ -1229,7 +1229,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
 
         // Avoid `[]` in the script — `cmd /C` misparses them. Node exits; ping stays in the Job.
-        let spawn_and_exit = "node -e \"require('child_process').spawn('ping -n 120 127.0.0.1',{shell:true,stdio:'ignore'});setTimeout(function(){process.exit(0)},800)\"";
+        let spawn_and_exit = "node -e \"require('child_process').spawn('ping -n 120 127.0.0.1',{shell:true,stdio:'ignore'});setTimeout(function(){process.exit(0)},3000)\"";
         let info = runner
             .start_for_test("profile-natural-job-close", ".", spawn_and_exit)
             .expect("start");
