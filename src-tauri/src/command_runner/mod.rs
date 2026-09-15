@@ -428,6 +428,28 @@ fn stream_lines<R: Read>(app: &AppHandle, session_id: &str, stream: &str, pipe: 
     }
 }
 
+fn terminal_state_after_wait(
+    runner: &CommandRunnerState,
+    session_id: &str,
+    exit_code: Option<i32>,
+    wait_failed: bool,
+) -> LaunchSessionState {
+    if wait_failed {
+        return LaunchSessionState::Failed;
+    }
+    if runner
+        .get(session_id)
+        .is_some_and(|session| session.state == LaunchSessionState::Stopping)
+    {
+        return LaunchSessionState::Stopped;
+    }
+    if exit_code == Some(0) {
+        LaunchSessionState::Stopped
+    } else {
+        LaunchSessionState::Failed
+    }
+}
+
 fn wait_on_process(
     runner: &CommandRunnerState,
     session_id: &str,
@@ -443,11 +465,8 @@ fn wait_on_process(
         match process {
             Some(process) => {
                 let (code, failed) = process.wait();
-                if failed {
-                    (code, LaunchSessionState::Failed)
-                } else {
-                    (code, LaunchSessionState::Stopped)
-                }
+                let final_state = terminal_state_after_wait(runner, session_id, code, failed);
+                (code, final_state)
             }
             None => (None, LaunchSessionState::Stopped),
         }
@@ -463,7 +482,11 @@ fn wait_on_process(
         };
         match child {
             Some(mut child) => match child.wait() {
-                Ok(status) => (status.code(), LaunchSessionState::Stopped),
+                Ok(status) => {
+                    let code = status.code();
+                    let final_state = terminal_state_after_wait(runner, session_id, code, false);
+                    (code, final_state)
+                }
                 Err(_) => (None, LaunchSessionState::Failed),
             },
             None => (None, LaunchSessionState::Stopped),
@@ -794,6 +817,26 @@ mod tests {
     }
 
     #[test]
+    fn terminal_state_marks_nonzero_natural_exit_failed_but_user_stop_stopped() {
+        let runner = CommandRunnerState::new();
+        runner.test_insert_session_with_state("natural-failure", LaunchSessionState::Running);
+        runner.test_insert_session_with_state("user-stop", LaunchSessionState::Stopping);
+
+        assert_eq!(
+            terminal_state_after_wait(&runner, "natural-failure", Some(7), false),
+            LaunchSessionState::Failed
+        );
+        assert_eq!(
+            terminal_state_after_wait(&runner, "user-stop", Some(1), false),
+            LaunchSessionState::Stopped
+        );
+        assert_eq!(
+            terminal_state_after_wait(&runner, "user-stop", None, true),
+            LaunchSessionState::Failed
+        );
+    }
+
+    #[test]
     fn terminal_session_history_is_bounded() {
         let runner = CommandRunnerState::new();
         let total = MAX_TERMINAL_SESSIONS + 5;
@@ -904,6 +947,21 @@ mod tests {
     }
 
     #[test]
+    fn session_reaches_failed_after_nonzero_natural_exit() {
+        let runner = CommandRunnerState::new();
+        let info = runner
+            .start_for_test("profile-exit-failed", ".", "exit /b 7")
+            .expect("start");
+        let session = wait_until_terminal(
+            &runner,
+            &info.launch_session_id,
+            Duration::from_secs(5),
+        );
+        assert_eq!(session.state, LaunchSessionState::Failed);
+        assert_eq!(session.exit_code, Some(7));
+    }
+
+    #[test]
     fn profile_can_start_again_after_natural_exit() {
         let runner = CommandRunnerState::new();
         let profile_id = "profile-restart";
@@ -944,10 +1002,7 @@ mod tests {
         assert_pid_exits(pid, Duration::from_secs(3));
         let final_info =
             wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
-        assert!(matches!(
-            final_info.state,
-            LaunchSessionState::Stopped | LaunchSessionState::Failed
-        ));
+        assert_eq!(final_info.state, LaunchSessionState::Stopped);
     }
 
     #[test]
@@ -963,10 +1018,7 @@ mod tests {
         }
         let final_info =
             wait_until_terminal(&runner, &info.launch_session_id, Duration::from_secs(5));
-        assert!(matches!(
-            final_info.state,
-            LaunchSessionState::Stopped | LaunchSessionState::Failed
-        ));
+        assert_eq!(final_info.state, LaunchSessionState::Stopped);
     }
 
     #[test]
