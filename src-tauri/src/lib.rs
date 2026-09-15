@@ -29,7 +29,7 @@ pub fn run() {
             health_check,
             list_runtime_items_safe,
             list_environment_candidates,
-            save_manual_override,
+            save_manual_override_safe,
             inspect_port,
             issue_process_termination_confirmation_safe,
             terminate_process_safe,
