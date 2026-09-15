@@ -8,6 +8,8 @@ use std::sync::{Mutex, OnceLock};
 use tauri::State;
 use uuid::Uuid;
 
+use super::config_transaction::with_config_rollback;
+
 pub(crate) fn launch_lifecycle_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -109,12 +111,12 @@ pub fn save_launch_profile_safe(
         existing.source_candidate_id = source_candidate_id;
         existing.user_modified = true;
         let profile_id = existing.profile_id.clone();
-        state.config.upsert_launch_profile(existing)?;
+        with_config_rollback(&state, || state.config.upsert_launch_profile(existing))?;
         return Ok(profile_id);
     }
 
     let profile_id = Uuid::new_v4().to_string();
-    state.config.upsert_launch_profile(LaunchProfile {
+    let profile = LaunchProfile {
         profile_id: profile_id.clone(),
         project_id,
         process_role: role,
@@ -123,7 +125,8 @@ pub fn save_launch_profile_safe(
         source_candidate_id,
         user_modified: true,
         port_hint: None,
-    })?;
+    };
+    with_config_rollback(&state, || state.config.upsert_launch_profile(profile))?;
     Ok(profile_id)
 }
 
@@ -147,7 +150,8 @@ pub fn remove_launch_profile_safe(
         return Err("PROFILE_RUNNING:请先停止该启动配置".to_string());
     }
 
-    if state.config.remove_launch_profile(&profile_id)? {
+    let removed = with_config_rollback(&state, || state.config.remove_launch_profile(&profile_id))?;
+    if removed {
         Ok(OperationResult::succeeded("启动配置已移除"))
     } else {
         Ok(OperationResult::succeeded("启动配置不存在或已移除"))
