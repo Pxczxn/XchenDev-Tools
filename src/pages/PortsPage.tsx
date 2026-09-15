@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { PageHeader } from "../components/PageHeader";
 import {
   inspectPort,
@@ -25,18 +25,28 @@ export function PortsPage() {
   const [rows, setRows] = useState<PortOccupancy[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const requestGenerationRef = useRef(0);
+
+  function invalidatePendingQuery() {
+    requestGenerationRef.current += 1;
+    setLoading(false);
+  }
 
   function changePort(value: string) {
+    invalidatePendingQuery();
     setPort(value);
     setRows([]);
     setMessage(null);
   }
 
   async function refreshRows(clearMessage: boolean): Promise<boolean> {
+    const generation = requestGenerationRef.current + 1;
+    requestGenerationRef.current = generation;
     const parsedPort = parsePort(port);
     if (parsedPort === null) {
       setRows([]);
       setMessage("端口必须是 1~65535 的整数");
+      setLoading(false);
       return false;
     }
 
@@ -44,14 +54,18 @@ export function PortsPage() {
     if (clearMessage) setMessage(null);
     try {
       const data = await inspectPort("both", parsedPort);
+      if (generation !== requestGenerationRef.current) return false;
       setRows(data);
       return true;
     } catch (e) {
+      if (generation !== requestGenerationRef.current) return false;
       setMessage(labelErrorText(String(e)));
       setRows([]);
       return false;
     } finally {
-      setLoading(false);
+      if (generation === requestGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }
 
