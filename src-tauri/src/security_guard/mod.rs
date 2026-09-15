@@ -199,6 +199,12 @@ pub fn validate_command_policy(command: &str) -> Result<(), String> {
                 .to_string(),
         );
     }
+    // Commands are ultimately executed through `cmd /C`. Percent expansion happens inside
+    // cmd before the child command runs, so an otherwise clean profile could become a shell
+    // chain after `%VAR%` substitution. Saved project launch commands do not need that feature.
+    if command.contains('%') {
+        return Err("COMMAND_POLICY_REJECTED:启动命令不允许环境变量展开".to_string());
+    }
 
     let entry = first_command_token(command)
         .ok_or_else(|| "COMMAND_POLICY_REJECTED:无法识别启动命令".to_string())?;
@@ -331,6 +337,21 @@ mod tests {
             "npm run dev > output.log",
             "npm run dev ^& taskkill /PID 1 /F",
             "npm run dev\r\ndel important.txt",
+        ];
+        for command in rejected {
+            assert!(
+                validate_command_policy(command).is_err(),
+                "expected rejected command: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn launch_policy_rejects_environment_expansion() {
+        let rejected = [
+            "npm run dev -- --host %XCHEN_HOST%",
+            "java -jar %APP_JAR%",
+            "%COMSPEC% /C dir",
         ];
         for command in rejected {
             assert!(
