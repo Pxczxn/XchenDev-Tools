@@ -147,7 +147,7 @@ pub fn snapshot_digest(pid: u32, name: &str, cwd: Option<&str>) -> String {
 }
 
 fn first_command_token(command: &str) -> Option<&str> {
-    let trimmed = command.trim_start();
+    let trimmed = command.trim_start().trim_start_matches('@').trim_start();
     if trimmed.is_empty() {
         return None;
     }
@@ -377,6 +377,7 @@ mod tests {
             "start npm run dev",
             "@taskkill /PID 123 /F",
             "@@powershell -Command Get-Process",
+            "@\"C:\\Windows\\System32\\taskkill.exe\" /PID 123 /F",
         ];
         for command in rejected {
             assert!(
