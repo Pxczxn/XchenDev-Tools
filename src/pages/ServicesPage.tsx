@@ -3,6 +3,7 @@ import { PageHeader } from "../components/PageHeader";
 import {
   controlWindowsService,
   getAppSettings,
+  issueServiceControlConfirmation,
   listManagedServices,
 } from "../ipc/client";
 import type { WindowsServiceInfo } from "../ipc/types";
@@ -69,20 +70,22 @@ export function ServicesPage() {
   }, []);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
   async function onControl(svc: WindowsServiceInfo, action: string) {
-    const ok = window.confirm(
-      `确认对「${svc.display_name}」执行 ${action} 操作？`,
-    );
-    if (!ok) return;
-    const token = crypto.randomUUID();
     try {
+      const confirmation = await issueServiceControlConfirmation(
+        svc.service_name,
+        action,
+      );
+      const ok = window.confirm(`确认执行服务操作？\n${confirmation.binding_summary}`);
+      if (!ok) return;
+
       const result = await controlWindowsService({
         serviceName: svc.service_name,
         action,
-        confirmationToken: token,
+        confirmationToken: confirmation.confirmation_token,
       });
       setMessage(
         formatOperationMessage(
@@ -125,42 +128,42 @@ export function ServicesPage() {
         {services.map((svc) => (
           <div key={svc.service_name} className="card">
             <div className="card-body">
-            <div className="env-candidate-head">
-              <span className={statusClass(svc.status)}>
-                {labelStatus(svc.status)}
-              </span>
-              <span className="env-tag">{labelStatus(svc.kind)}</span>
-              <span className="env-source">{svc.service_name}</span>
-            </div>
-            <div className="env-path">{svc.display_name}</div>
-            {svc.status_reason && (
-              <div className="env-reason">{svc.status_reason}</div>
-            )}
-            <div className="list-card-actions">
-              <button
-                type="button"
-                disabled={!svc.can_control}
-                onClick={() => onControl(svc, "start")}
-              >
-                启动
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!svc.can_control}
-                onClick={() => onControl(svc, "stop")}
-              >
-                停止
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!svc.can_control}
-                onClick={() => onControl(svc, "restart")}
-              >
-                重启
-              </button>
-            </div>
+              <div className="env-candidate-head">
+                <span className={statusClass(svc.status)}>
+                  {labelStatus(svc.status)}
+                </span>
+                <span className="env-tag">{labelStatus(svc.kind)}</span>
+                <span className="env-source">{svc.service_name}</span>
+              </div>
+              <div className="env-path">{svc.display_name}</div>
+              {svc.status_reason && (
+                <div className="env-reason">{svc.status_reason}</div>
+              )}
+              <div className="list-card-actions">
+                <button
+                  type="button"
+                  disabled={!svc.can_control}
+                  onClick={() => onControl(svc, "start")}
+                >
+                  启动
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={!svc.can_control}
+                  onClick={() => onControl(svc, "stop")}
+                >
+                  停止
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={!svc.can_control}
+                  onClick={() => onControl(svc, "restart")}
+                >
+                  重启
+                </button>
+              </div>
             </div>
           </div>
         ))}
