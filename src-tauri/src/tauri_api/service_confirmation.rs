@@ -8,6 +8,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -66,21 +67,45 @@ fn binding_digest(service: &WindowsServiceInfo, action: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn wait_for_status(
-    state: &AppState,
-    service_name: &str,
-    target: WindowsServiceStatus,
-) -> Result<(), String> {
+fn query_service_status(service_name: &str) -> Result<WindowsServiceStatus, String> {
+    let output = Command::new("sc")
+        .args(["query", service_name])
+        .output()
+        .map_err(|e| format!("SERVICE_QUERY_FAILED:{}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if !stderr.trim().is_empty() { stderr } else { stdout };
+        return Err(format!("SERVICE_QUERY_FAILED:{}", detail.trim()));
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout).to_uppercase();
+    if text.contains("STOP_PENDING") {
+        Ok(WindowsServiceStatus::Stopping)
+    } else if text.contains("START_PENDING") {
+        Ok(WindowsServiceStatus::Starting)
+    } else if text.contains("RUNNING") {
+        Ok(WindowsServiceStatus::Running)
+    } else if text.contains("STOPPED") {
+        Ok(WindowsServiceStatus::Stopped)
+    } else if text.contains("PAUSED") {
+        Ok(WindowsServiceStatus::Paused)
+    } else {
+        Ok(WindowsServiceStatus::Unknown)
+    }
+}
+
+fn wait_for_status(service_name: &str, target: WindowsServiceStatus) -> Result<(), String> {
     let started = Instant::now();
     loop {
-        let service = find_managed_service(state, service_name)?;
-        if service.status == target {
+        let current = query_service_status(service_name)?;
+        if current == target {
             return Ok(());
         }
         if started.elapsed() >= SERVICE_STATE_TIMEOUT {
             return Err(format!(
                 "SERVICE_CONTROL_TIMEOUT:等待服务进入 {:?} 超时，当前 {:?}",
-                target, service.status
+                target, current
             ));
         }
         thread::sleep(SERVICE_POLL_INTERVAL);
@@ -88,7 +113,6 @@ fn wait_for_status(
 }
 
 fn execute_service_action(
-    state: &AppState,
     service: &WindowsServiceInfo,
     action: &str,
 ) -> Result<(), String> {
@@ -100,7 +124,7 @@ fn execute_service_action(
             if service.status != WindowsServiceStatus::Starting {
                 service_manager::control_service(&service.service_name, "start")?;
             }
-            wait_for_status(state, &service.service_name, WindowsServiceStatus::Running)
+            wait_for_status(&service.service_name, WindowsServiceStatus::Running)
         }
         "stop" => {
             if service.status == WindowsServiceStatus::Stopped {
@@ -109,17 +133,17 @@ fn execute_service_action(
             if service.status != WindowsServiceStatus::Stopping {
                 service_manager::control_service(&service.service_name, "stop")?;
             }
-            wait_for_status(state, &service.service_name, WindowsServiceStatus::Stopped)
+            wait_for_status(&service.service_name, WindowsServiceStatus::Stopped)
         }
         "restart" => {
             if service.status != WindowsServiceStatus::Stopped {
                 if service.status != WindowsServiceStatus::Stopping {
                     service_manager::control_service(&service.service_name, "stop")?;
                 }
-                wait_for_status(state, &service.service_name, WindowsServiceStatus::Stopped)?;
+                wait_for_status(&service.service_name, WindowsServiceStatus::Stopped)?;
             }
             service_manager::control_service(&service.service_name, "start")?;
-            wait_for_status(state, &service.service_name, WindowsServiceStatus::Running)
+            wait_for_status(&service.service_name, WindowsServiceStatus::Running)
         }
         _ => Err("SERVICE_ACTION_INVALID:不支持的操作".to_string()),
     }
@@ -193,7 +217,7 @@ pub fn control_windows_service_safe(
     }
 
     let target = format!("service:{}:{}", service_name, action);
-    match execute_service_action(&state, &service, &action) {
+    match execute_service_action(&service, &action) {
         Ok(()) => {
             audit_log::record_action(
                 &state.config,
@@ -251,5 +275,38 @@ mod tests {
         assert!(validate_action("stop").is_ok());
         assert!(validate_action("restart").is_ok());
         assert!(validate_action("delete").is_err());
+    }
+
+    #[test]
+    fn parses_sc_states_without_false_running_match() {
+        assert_eq!(
+            parse_sc_status("STATE              : 2  START_PENDING"),
+            WindowsServiceStatus::Starting
+        );
+        assert_eq!(
+            parse_sc_status("STATE              : 3  STOP_PENDING"),
+            WindowsServiceStatus::Stopping
+        );
+        assert_eq!(
+            parse_sc_status("STATE              : 4  RUNNING"),
+            WindowsServiceStatus::Running
+        );
+    }
+}
+
+fn parse_sc_status(text: &str) -> WindowsServiceStatus {
+    let upper = text.to_uppercase();
+    if upper.contains("STOP_PENDING") {
+        WindowsServiceStatus::Stopping
+    } else if upper.contains("START_PENDING") {
+        WindowsServiceStatus::Starting
+    } else if upper.contains("RUNNING") {
+        WindowsServiceStatus::Running
+    } else if upper.contains("STOPPED") {
+        WindowsServiceStatus::Stopped
+    } else if upper.contains("PAUSED") {
+        WindowsServiceStatus::Paused
+    } else {
+        WindowsServiceStatus::Unknown
     }
 }
