@@ -159,6 +159,7 @@ pub enum TechnologyStack {
     Gradle,
     Python,
     Php,
+    Rust,
     Unknown,
 }
 
