@@ -62,26 +62,26 @@ pub fn inspect_directory_processes(
 ) -> Result<Vec<DirectoryProcessMatch>, String> {
     let extra = state.config.extra_protected_names();
     let root = security_guard::normalize_directory(&root_path)?;
-    let summaries = process_manager::list_all_summaries();
+    let snapshots = process_manager::list_all_summaries_with_start_time();
     let mut matches = Vec::new();
-    for summary in summaries {
+    for (summary, start_time) in snapshots {
         let cwd = match &summary.working_directory {
             Some(c) => c,
             None => continue,
         };
-        let level = security_guard::directory_matches_prefix(cwd, &root);
-        if level.is_none() {
+        let Some(level) = security_guard::directory_matches_prefix(cwd, &root) else {
             continue;
-        }
+        };
         let ports = port_manager::ports_for_pid(summary.pid);
-        let digest = process_manager::digest_for(
+        let digest = process_manager::digest_for_snapshot(
             summary.pid,
             &summary.name,
             summary.working_directory.as_deref(),
+            start_time,
         );
         let protection = process_manager::protection_with_extra(&summary, &extra);
         matches.push(DirectoryProcessMatch {
-            match_level: level.unwrap(),
+            match_level: level,
             pid: summary.pid,
             parent_pid: None,
             name: summary.name,
