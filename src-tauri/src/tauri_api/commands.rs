@@ -10,6 +10,8 @@ use crate::process_manager;
 use crate::project_scanner;
 use crate::security_guard;
 use crate::service_manager;
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 use tauri::State;
 
 #[tauri::command]
@@ -125,11 +127,93 @@ pub fn export_app_config(state: State<'_, AppState>) -> Result<String, String> {
     state.config.export_json()
 }
 
+fn appended_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value: OsString = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+fn lexical_absolute(path: &Path) -> Result<PathBuf, String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("CONFIG_EXPORT_TARGET_INVALID:{}", e))?
+            .join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    Ok(normalized)
+}
+
+fn resolved_path_for_compare(path: &Path) -> Result<PathBuf, String> {
+    if path.exists() {
+        return std::fs::canonicalize(path)
+            .map_err(|e| format!("CONFIG_EXPORT_TARGET_INVALID:{}", e));
+    }
+    if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) {
+        if parent.exists() {
+            let canonical_parent = std::fs::canonicalize(parent)
+                .map_err(|e| format!("CONFIG_EXPORT_TARGET_INVALID:{}", e))?;
+            return Ok(canonical_parent.join(file_name));
+        }
+    }
+    lexical_absolute(path)
+}
+
+#[cfg(windows)]
+fn same_path(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy()
+        .eq_ignore_ascii_case(&right.to_string_lossy())
+}
+
+#[cfg(not(windows))]
+fn same_path(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+fn ensure_export_target_safe(config_path: &Path, target_path: &str) -> Result<(), String> {
+    let target_path = target_path.trim();
+    if target_path.is_empty() {
+        return Err("CONFIG_EXPORT_TARGET_INVALID:导出路径不能为空".to_string());
+    }
+    let target = PathBuf::from(target_path);
+    if target.file_name().is_none() {
+        return Err("CONFIG_EXPORT_TARGET_INVALID:导出目标必须是文件".to_string());
+    }
+
+    let target = resolved_path_for_compare(&target)?;
+    let protected = [
+        config_path.to_path_buf(),
+        appended_path(config_path, ".bak"),
+        appended_path(config_path, ".tmp"),
+    ];
+    for path in protected {
+        let resolved = resolved_path_for_compare(&path)?;
+        if same_path(&target, &resolved) {
+            return Err(
+                "CONFIG_EXPORT_TARGET_PROTECTED:导出目标不能覆盖当前配置或其事务文件"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn export_app_config_to_path(
     state: State<'_, AppState>,
     target_path: String,
 ) -> Result<OperationResult, String> {
+    ensure_export_target_safe(&state.config.config_file_path(), &target_path)?;
     state.config.write_export_to_path(&target_path)?;
     Ok(OperationResult::succeeded("配置已导出"))
 }
@@ -161,4 +245,51 @@ pub fn get_app_settings(state: State<'_, AppState>) -> AppSettings {
 #[tauri::command]
 pub fn list_default_protected_processes() -> Vec<String> {
     security_guard::default_protected_process_names()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn export_target_rejects_managed_config_files() {
+        let dir = tempdir().expect("tempdir");
+        let config = dir.path().join("config.json");
+        std::fs::write(&config, "{}").expect("config");
+
+        assert!(ensure_export_target_safe(&config, config.to_str().expect("config path")).is_err());
+        assert!(ensure_export_target_safe(
+            &config,
+            appended_path(&config, ".bak").to_str().expect("backup path")
+        )
+        .is_err());
+        assert!(ensure_export_target_safe(
+            &config,
+            appended_path(&config, ".tmp").to_str().expect("temp path")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn export_target_allows_normal_sibling_file() {
+        let dir = tempdir().expect("tempdir");
+        let config = dir.path().join("config.json");
+        std::fs::write(&config, "{}").expect("config");
+        let export = dir.path().join("backup-export.json");
+
+        assert!(ensure_export_target_safe(&config, export.to_str().expect("export path")).is_ok());
+    }
+
+    #[test]
+    fn export_target_rejects_alias_with_parent_navigation() {
+        let dir = tempdir().expect("tempdir");
+        let nested = dir.path().join("nested");
+        std::fs::create_dir_all(&nested).expect("nested");
+        let config = dir.path().join("config.json");
+        std::fs::write(&config, "{}").expect("config");
+        let alias = nested.join("..").join("config.json");
+
+        assert!(ensure_export_target_safe(&config, alias.to_str().expect("alias path")).is_err());
+    }
 }
