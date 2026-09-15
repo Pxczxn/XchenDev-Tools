@@ -3,6 +3,8 @@ use crate::domain::{LaunchSessionState, OperationResult, ProjectInfo};
 use std::collections::HashSet;
 use tauri::State;
 
+use super::launch_profiles::launch_lifecycle_lock;
+
 #[tauri::command]
 pub fn list_projects(state: State<'_, AppState>) -> Vec<ProjectInfo> {
     state.config.list_projects()
@@ -22,6 +24,10 @@ pub fn remove_project(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<OperationResult, String> {
+    let _lifecycle_guard = launch_lifecycle_lock()
+        .lock()
+        .map_err(|_| "LAUNCH_LIFECYCLE_LOCK_FAILED:启动关系锁失败".to_string())?;
+
     let profile_ids: HashSet<String> = state
         .config
         .list_profiles_for_project(&project_id)
