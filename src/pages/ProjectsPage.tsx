@@ -22,6 +22,7 @@ import type {
   TechnologyCandidate,
 } from "../ipc/types";
 import { formatDisplayPath } from "../lib/formatDisplay";
+import { buildProjectRuntimeSnapshot } from "../lib/projectRuntime";
 import { labelErrorText, labelStatus } from "../lib/statusLabels";
 
 const ACTIVE_SESSION_STATES = new Set(["STARTING", "RUNNING", "STOPPING"]);
@@ -119,6 +120,7 @@ export function ProjectsPage() {
     useState<LastSessionByProfile>({});
   const [logsBySessionId, setLogsBySessionId] = useState<LogsBySessionId>({});
   const [loading, setLoading] = useState(false);
+  const [bulkAction, setBulkAction] = useState<"start" | "stop" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const terminalEventsRef = useRef<Record<string, TerminalEvent>>({});
   const lastSessionByProfileRef = useRef<LastSessionByProfile>({});
@@ -382,6 +384,63 @@ export function ProjectsPage() {
     }
   }
 
+  function rememberStartedSession(
+    profile: LaunchProfile,
+    info: LaunchSessionInfo,
+  ): LaunchSessionInfo {
+    const pendingTerminal = terminalEventsRef.current[info.launch_session_id];
+    const resolvedInfo = pendingTerminal
+      ? {
+          ...info,
+          state: terminalState(pendingTerminal, info.state),
+          exit_code: pendingTerminal.exitCode ?? info.exit_code,
+        }
+      : info;
+    const previousSessionId = lastSessionByProfileRef.current[profile.profile_id];
+    const nextLastSessions = {
+      ...lastSessionByProfileRef.current,
+      [profile.profile_id]: info.launch_session_id,
+    };
+    lastSessionByProfileRef.current = nextLastSessions;
+
+    setSessionsById((prev) => {
+      const next = {
+        ...prev,
+        [info.launch_session_id]: resolvedInfo,
+      };
+      if (previousSessionId && previousSessionId !== info.launch_session_id) {
+        delete next[previousSessionId];
+      }
+      return next;
+    });
+    setLastSessionByProfile(nextLastSessions);
+    setLogsBySessionId((prev) => {
+      const next = {
+        ...prev,
+        [info.launch_session_id]: prev[info.launch_session_id] ?? [],
+      };
+      if (previousSessionId && previousSessionId !== info.launch_session_id) {
+        delete next[previousSessionId];
+      }
+      return next;
+    });
+    if (pendingTerminal) {
+      delete terminalEventsRef.current[info.launch_session_id];
+    }
+    return resolvedInfo;
+  }
+
+  function markSessionStopping(session: LaunchSessionInfo) {
+    setSessionsById((prev) => {
+      const current = prev[session.launch_session_id];
+      if (!current || !ACTIVE_SESSION_STATES.has(current.state)) return prev;
+      return {
+        ...prev,
+        [session.launch_session_id]: { ...current, state: "STOPPING" },
+      };
+    });
+  }
+
   async function onStart(profile: LaunchProfile) {
     try {
       const confirm = await issueLaunchConfirmation(profile.profile_id);
@@ -392,56 +451,11 @@ export function ProjectsPage() {
         profile.profile_id,
         confirm.confirmation_token,
       );
-      const pendingTerminal = terminalEventsRef.current[info.launch_session_id];
-      const resolvedInfo = pendingTerminal
-        ? {
-            ...info,
-            state: terminalState(pendingTerminal, info.state),
-            exit_code: pendingTerminal.exitCode ?? info.exit_code,
-          }
-        : info;
-      const previousSessionId =
-        lastSessionByProfileRef.current[profile.profile_id];
-      const nextLastSessions = {
-        ...lastSessionByProfileRef.current,
-        [profile.profile_id]: info.launch_session_id,
-      };
-      lastSessionByProfileRef.current = nextLastSessions;
-
-      setSessionsById((prev) => {
-        const next = {
-          ...prev,
-          [info.launch_session_id]: resolvedInfo,
-        };
-        if (
-          previousSessionId &&
-          previousSessionId !== info.launch_session_id
-        ) {
-          delete next[previousSessionId];
-        }
-        return next;
-      });
-      setLastSessionByProfile(nextLastSessions);
-      setLogsBySessionId((prev) => {
-        const next = {
-          ...prev,
-          [info.launch_session_id]: prev[info.launch_session_id] ?? [],
-        };
-        if (
-          previousSessionId &&
-          previousSessionId !== info.launch_session_id
-        ) {
-          delete next[previousSessionId];
-        }
-        return next;
-      });
-      if (pendingTerminal) {
-        delete terminalEventsRef.current[info.launch_session_id];
-      }
+      const resolvedInfo = rememberStartedSession(profile, info);
       setMessage(
-        pendingTerminal
-          ? `会话已结束，退出码 ${pendingTerminal.exitCode ?? "?"}`
-          : `会话已启动 PID ${info.pid ?? "?"}`,
+        resolvedInfo.state === "RUNNING" || resolvedInfo.state === "STARTING"
+          ? `会话已启动 PID ${resolvedInfo.pid ?? "?"}`
+          : `会话已结束，退出码 ${resolvedInfo.exit_code ?? "?"}`,
       );
     } catch (e) {
       setMessage(labelErrorText(String(e)));
@@ -451,17 +465,107 @@ export function ProjectsPage() {
   async function onStop(session: LaunchSessionInfo) {
     try {
       await stopLaunchSession(session.launch_session_id);
-      setSessionsById((prev) => {
-        const current = prev[session.launch_session_id];
-        if (!current || !ACTIVE_SESSION_STATES.has(current.state)) return prev;
-        return {
-          ...prev,
-          [session.launch_session_id]: { ...current, state: "STOPPING" },
-        };
-      });
+      markSessionStopping(session);
       setMessage(`已请求停止 PID ${session.pid ?? "?"}`);
     } catch (e) {
       setMessage(labelErrorText(String(e)));
+    }
+  }
+
+  const runtimeSnapshot = buildProjectRuntimeSnapshot(profiles, sessionsById);
+
+  async function onStartAll() {
+    if (bulkAction || runtimeSnapshot.startableProfiles.length === 0) return;
+    const generation = projectContextGenerationRef.current;
+    setBulkAction("start");
+    try {
+      const confirmations: Array<{
+        profile: LaunchProfile;
+        confirmation: Awaited<ReturnType<typeof issueLaunchConfirmation>>;
+      }> = [];
+      for (const profile of runtimeSnapshot.startableProfiles) {
+        const confirmation = await issueLaunchConfirmation(profile.profile_id);
+        confirmations.push({ profile, confirmation });
+      }
+
+      const summary = confirmations
+        .map(
+          ({ profile, confirmation }) =>
+            `${labelStatus(profile.process_role)}：${confirmation.binding_summary}`,
+        )
+        .join("\n\n");
+      const ok = window.confirm(
+        `确认启动当前项目的 ${confirmations.length} 个配置？\n\n${summary}`,
+      );
+      if (!ok) {
+        if (generation === projectContextGenerationRef.current) {
+          setMessage("已取消批量启动");
+        }
+        return;
+      }
+
+      let succeeded = 0;
+      const failures: string[] = [];
+      for (const { profile, confirmation } of confirmations) {
+        try {
+          const info = await startLaunchProfile(
+            profile.profile_id,
+            confirmation.confirmation_token,
+          );
+          rememberStartedSession(profile, info);
+          succeeded += 1;
+        } catch (e) {
+          failures.push(
+            `${labelStatus(profile.process_role)}：${labelErrorText(String(e))}`,
+          );
+        }
+      }
+
+      if (generation === projectContextGenerationRef.current) {
+        setMessage(
+          failures.length === 0
+            ? `已启动 ${succeeded} 个配置`
+            : `批量启动完成：成功 ${succeeded}，失败 ${failures.length}。${failures.join("；")}`,
+        );
+      }
+    } catch (e) {
+      if (generation === projectContextGenerationRef.current) {
+        setMessage(labelErrorText(String(e)));
+      }
+    } finally {
+      setBulkAction(null);
+    }
+  }
+
+  async function onStopAll() {
+    if (bulkAction || runtimeSnapshot.stoppableSessions.length === 0) return;
+    const generation = projectContextGenerationRef.current;
+    const targets = runtimeSnapshot.stoppableSessions;
+    const ok = window.confirm(`确认停止当前项目的 ${targets.length} 个运行会话？`);
+    if (!ok) return;
+
+    setBulkAction("stop");
+    let succeeded = 0;
+    const failures: string[] = [];
+    try {
+      for (const session of targets) {
+        try {
+          await stopLaunchSession(session.launch_session_id);
+          markSessionStopping(session);
+          succeeded += 1;
+        } catch (e) {
+          failures.push(`PID ${session.pid ?? "?"}：${labelErrorText(String(e))}`);
+        }
+      }
+      if (generation === projectContextGenerationRef.current) {
+        setMessage(
+          failures.length === 0
+            ? `已请求停止 ${succeeded} 个会话`
+            : `批量停止完成：成功 ${succeeded}，失败 ${failures.length}。${failures.join("；")}`,
+        );
+      }
+    } finally {
+      setBulkAction(null);
     }
   }
 
@@ -469,7 +573,7 @@ export function ProjectsPage() {
     <>
       <PageHeader
         title="项目管理"
-        description="保存项目、扫描技术栈、配置并启动前后端会话"
+        description="保存项目、扫描技术栈、配置并统一启停前后端会话"
       />
 
       {projects.length > 0 && (
@@ -612,6 +716,41 @@ export function ProjectsPage() {
         <div className="card">
           <div className="card-header">
             <h3>已保存配置</h3>
+            <div className="project-runtime-actions">
+              <span
+                className={
+                  runtimeSnapshot.activeSessions.length > 0
+                    ? "env-badge ok"
+                    : "env-badge muted"
+                }
+              >
+                运行 {runtimeSnapshot.activeSessions.length}/{profiles.length}
+              </span>
+              <button
+                type="button"
+                className="btn-sm"
+                onClick={() => void onStartAll()}
+                disabled={
+                  bulkAction !== null || runtimeSnapshot.startableProfiles.length === 0
+                }
+              >
+                {bulkAction === "start"
+                  ? "启动中…"
+                  : `全部启动 (${runtimeSnapshot.startableProfiles.length})`}
+              </button>
+              <button
+                type="button"
+                className="secondary btn-sm"
+                onClick={() => void onStopAll()}
+                disabled={
+                  bulkAction !== null || runtimeSnapshot.stoppableSessions.length === 0
+                }
+              >
+                {bulkAction === "stop"
+                  ? "停止中…"
+                  : `全部停止 (${runtimeSnapshot.stoppableSessions.length})`}
+              </button>
+            </div>
           </div>
           <div className="card-body env-candidate-list">
             {profiles.map((profile) => {
@@ -655,19 +794,26 @@ export function ProjectsPage() {
                         type="button"
                         className="secondary"
                         onClick={() => onStop(activeSession)}
-                        disabled={activeSession.state === "STOPPING"}
+                        disabled={
+                          bulkAction !== null || activeSession.state === "STOPPING"
+                        }
                       >
                         {activeSession.state === "STOPPING" ? "停止中…" : "停止"}
                       </button>
                     ) : (
                       <>
-                        <button type="button" onClick={() => onStart(profile)}>
+                        <button
+                          type="button"
+                          onClick={() => onStart(profile)}
+                          disabled={bulkAction !== null}
+                        >
                           启动
                         </button>
                         <button
                           type="button"
                           className="secondary"
                           onClick={() => void onRemoveProfile(profile)}
+                          disabled={bulkAction !== null}
                         >
                           移除配置
                         </button>
