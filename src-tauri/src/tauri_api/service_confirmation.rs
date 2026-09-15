@@ -97,7 +97,11 @@ fn query_service_status(service_name: &str) -> Result<WindowsServiceStatus, Stri
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = if !stderr.trim().is_empty() { stderr } else { stdout };
+        let detail = if !stderr.trim().is_empty() {
+            stderr
+        } else {
+            stdout
+        };
         return Err(format!("SERVICE_QUERY_FAILED:{}", detail.trim()));
     }
 
