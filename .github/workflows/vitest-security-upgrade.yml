@@ -1,0 +1,49 @@
+name: Vitest Security Upgrade
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/vitest-security-upgrade.yml
+
+permissions:
+  contents: write
+
+jobs:
+  upgrade:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Upgrade Vitest
+        run: npm install --save-dev "vitest@^4.1.11" --ignore-scripts
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Audit moderate or higher
+        run: npm audit --audit-level=moderate
+
+      - name: Commit generated dependency files
+        shell: pwsh
+        run: |
+          git config user.name "XchenDev CI"
+          git config user.email "Pxczxn@163.com"
+          git add package.json package-lock.json
+          if (git diff --cached --quiet) {
+            Write-Host "No dependency changes to commit"
+            exit 0
+          }
+          git commit -m "【security】升级 Vitest 修复开发依赖漏洞"
+          git push origin HEAD:master
