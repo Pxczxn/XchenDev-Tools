@@ -32,19 +32,25 @@ export function ProcessesPage() {
     }
   }
 
-  async function onScan() {
-    if (!rootPath) return;
+  async function refreshRows(clearMessage: boolean): Promise<boolean> {
+    if (!rootPath) return false;
     setLoading(true);
-    setMessage(null);
+    if (clearMessage) setMessage(null);
     try {
       const data = await inspectDirectoryProcesses(rootPath);
       setRows(data);
+      return true;
     } catch (e) {
       setMessage(labelErrorText(String(e)));
       setRows([]);
+      return false;
     } finally {
       setLoading(false);
     }
+  }
+
+  async function onScan() {
+    await refreshRows(true);
   }
 
   async function onTerminate(row: DirectoryProcessMatch, force: boolean) {
@@ -68,14 +74,14 @@ export function ProcessesPage() {
         expectedName: row.name,
         expectedCwd: row.working_directory,
       });
-      setMessage(
-        formatOperationMessage(
-          result.status,
-          result.message,
-          result.reason_code,
-        ),
+      const operationMessage = formatOperationMessage(
+        result.status,
+        result.message,
+        result.reason_code,
       );
-      await onScan();
+      if (await refreshRows(false)) {
+        setMessage(operationMessage);
+      }
     } catch (e) {
       setMessage(labelErrorText(String(e)));
     }
