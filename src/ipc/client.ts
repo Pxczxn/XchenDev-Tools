@@ -35,7 +35,7 @@ export async function listRuntimeItems(): Promise<RuntimeItem[]> {
 }
 
 export async function listLaunchSessions(): Promise<LaunchSessionInfo[]> {
-  return invoke("list_launch_sessions");
+  return invoke("list_active_launch_sessions");
 }
 
 export async function listManagedServices(): Promise<WindowsServiceInfo[]> {
