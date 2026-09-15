@@ -181,8 +181,13 @@ pub fn digest_for_snapshot(pid: u32, name: &str, cwd: Option<&str>, start_time: 
 pub fn digest_for(pid: u32, name: &str, cwd: Option<&str>) -> String {
     // Bind directory-operation snapshots to process creation identity as well as PID/name/cwd.
     // If Windows reuses the PID before the user confirms termination, the recomputed digest changes.
-    let start_time = process_start_time_secs(pid).unwrap_or(0);
-    digest_for_snapshot(pid, name, cwd, start_time)
+    match process_start_time_secs(pid) {
+        Some(start_time) => digest_for_snapshot(pid, name, cwd, start_time),
+        None => {
+            let identity_name = format!("{}|start=missing", name);
+            snapshot_digest(pid, &identity_name, cwd)
+        }
+    }
 }
 
 pub fn protection(summary: &ProcessSummary) -> ProtectionDecision {
