@@ -260,7 +260,7 @@ export function SettingsPage() {
         <div className="card-body">
         <p className="muted">
           开发态默认保存到仓库根目录的 <code>config</code>；安装版默认保存到{" "}
-          <code>%LOCALAPPDATA%\XchenDev\XchenDev-Tools\config</code>，与安装目录隔离。环境变量覆盖优先。
+          <code>%LOCALAPPDATA%\XchenDev-Tools\config</code>，与安装目录隔离。环境变量覆盖优先。
         </p>
         {configDir && (
           <>
