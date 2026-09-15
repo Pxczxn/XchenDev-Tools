@@ -139,10 +139,19 @@ pub fn terminate_directory_process_safe(
     expected_name: String,
     expected_cwd: Option<String>,
 ) -> Result<OperationResult, String> {
+    let current = match process_manager::find_process_summary(pid) {
+        Some(summary) => summary,
+        None => {
+            return Ok(OperationResult::rejected(
+                "PROCESS_SNAPSHOT_MISMATCH",
+                "进程快照已失效，请刷新",
+            ));
+        }
+    };
     let current_digest = process_manager::digest_for(
         pid,
-        &expected_name,
-        expected_cwd.as_deref(),
+        &current.name,
+        current.working_directory.as_deref(),
     );
     if current_digest != snapshot_digest {
         return Ok(OperationResult::rejected(
