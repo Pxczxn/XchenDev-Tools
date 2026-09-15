@@ -32,6 +32,7 @@ pub fn run() {
             inspect_port,
             issue_process_termination_confirmation_safe,
             terminate_process_safe,
+            terminate_port_process_safe,
             inspect_directory_processes,
             terminate_directory_process_safe,
             scan_project_directory,
