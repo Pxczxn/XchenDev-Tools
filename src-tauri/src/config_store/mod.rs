@@ -419,8 +419,11 @@ pub fn open_at(path: PathBuf) -> ConfigStore {
     }
 }
 
-/// 默认：应用同目录下的 `config/config.json`。
-/// `tauri dev` 时解析到仓库根目录的 `config/`（可执行文件在 `src-tauri/target/*/debug`）。
+/// 默认配置位置：
+/// - 开发态（`tauri dev` / 仓库 target）：仓库根目录 `config/config.json`；
+/// - 安装态：`%LOCALAPPDATA%\XchenDev\XchenDev-Tools\config\config.json`。
+///
+/// `XCHEN_CONFIG_FILE`、`XCHEN_CONFIG_DIR`、`XCHEN_TOOLS_HOME` 可显式覆盖默认位置。
 pub fn config_file_path() -> PathBuf {
     if let Ok(custom) = std::env::var("XCHEN_CONFIG_FILE") {
         return PathBuf::from(custom);
@@ -436,18 +439,43 @@ pub fn config_dir() -> PathBuf {
 }
 
 fn app_base_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("XCHEN_TOOLS_HOME") {
+    let custom_home = std::env::var("XCHEN_TOOLS_HOME").ok();
+    let executable = std::env::current_exe().ok();
+    let local_app_data = std::env::var("LOCALAPPDATA").ok();
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    resolve_app_base_dir(
+        custom_home.as_deref(),
+        executable.as_deref(),
+        local_app_data.as_deref(),
+        &current_dir,
+    )
+}
+
+fn resolve_app_base_dir(
+    custom_home: Option<&str>,
+    executable: Option<&Path>,
+    local_app_data: Option<&str>,
+    current_dir: &Path,
+) -> PathBuf {
+    if let Some(home) = custom_home {
         return PathBuf::from(home);
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(project_root) = project_root_from_exe(&exe) {
+    if let Some(exe) = executable {
+        if let Some(project_root) = project_root_from_exe(exe) {
             return project_root;
         }
-        if let Some(parent) = exe.parent() {
-            return parent.to_path_buf();
-        }
     }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    if let Some(local) = local_app_data
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return PathBuf::from(local).join("XchenDev").join("XchenDev-Tools");
+    }
+    if let Some(parent) = executable.and_then(Path::parent) {
+        return parent.to_path_buf();
+    }
+    current_dir.to_path_buf()
 }
 
 fn project_root_from_exe(exe: &Path) -> Option<PathBuf> {
@@ -537,6 +565,55 @@ mod tests {
             serde_json::to_vec_pretty(config).expect("serialize config"),
         )
         .expect("write config");
+    }
+
+    #[test]
+    fn base_dir_explicit_home_has_highest_priority() {
+        let executable = PathBuf::from("repo")
+            .join("src-tauri")
+            .join("target")
+            .join("debug")
+            .join("xchendev-tools.exe");
+        let resolved = resolve_app_base_dir(
+            Some("D:\\Portable\\XchenDev-Tools"),
+            Some(&executable),
+            Some("C:\\Users\\demo\\AppData\\Local"),
+            Path::new("fallback"),
+        );
+        assert_eq!(resolved, PathBuf::from("D:\\Portable\\XchenDev-Tools"));
+    }
+
+    #[test]
+    fn base_dir_dev_repository_wins_over_local_app_data() {
+        let executable = PathBuf::from("repo")
+            .join("src-tauri")
+            .join("target")
+            .join("debug")
+            .join("xchendev-tools.exe");
+        let resolved = resolve_app_base_dir(
+            None,
+            Some(&executable),
+            Some("C:\\Users\\demo\\AppData\\Local"),
+            Path::new("fallback"),
+        );
+        assert_eq!(resolved, PathBuf::from("repo"));
+    }
+
+    #[test]
+    fn base_dir_installed_app_uses_isolated_local_app_data() {
+        let executable = PathBuf::from("C:\\Program Files\\XchenDev-Tools\\XchenDev-Tools.exe");
+        let resolved = resolve_app_base_dir(
+            None,
+            Some(&executable),
+            Some("C:\\Users\\demo\\AppData\\Local"),
+            Path::new("fallback"),
+        );
+        assert_eq!(
+            resolved,
+            PathBuf::from("C:\\Users\\demo\\AppData\\Local")
+                .join("XchenDev")
+                .join("XchenDev-Tools")
+        );
     }
 
     #[test]

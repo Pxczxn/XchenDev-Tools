@@ -63,8 +63,8 @@ export function SettingsPage() {
       })
       .catch(() => {
         if (disposed) return;
-        setConfigDir("（应用同目录）/config");
-        setConfigFile("（应用同目录）/config/config.json");
+        setConfigDir("（无法读取实际配置目录）");
+        setConfigFile("（无法读取实际配置文件）");
       });
     getAppSettings()
       .then((s) => {
@@ -259,8 +259,8 @@ export function SettingsPage() {
         </div>
         <div className="card-body">
         <p className="muted">
-          默认目录为应用同目录下的 <code>config</code>，主文件为{" "}
-          <code>config.json</code>。
+          开发态默认保存到仓库根目录的 <code>config</code>；安装版默认保存到{" "}
+          <code>%LOCALAPPDATA%\XchenDev\XchenDev-Tools\config</code>，与安装目录隔离。环境变量覆盖优先。
         </p>
         {configDir && (
           <>
