@@ -371,4 +371,71 @@ mod tests {
         assert_eq!(result.candidates[0].status, CandidateStatus::EvidenceOnly);
         assert!(result.candidates[0].conflict_group.is_none());
     }
+
+    #[test]
+    fn fullstack_multimodule_layout_is_stable_across_rescans() {
+        let root = tempdir().expect("tempdir");
+        let web = root.path().join("xingyu-web");
+        let backend = root.path().join("xingyu-backend");
+        let starter = backend.join("xingyu-starter");
+        fs::create_dir_all(&web).expect("web");
+        fs::create_dir_all(&starter).expect("starter");
+
+        fs::write(
+            web.join("package.json"),
+            r#"{"scripts":{"build":"vite build","dev":"vite","start":"vite preview"}}"#,
+        )
+        .expect("web package");
+        fs::write(
+            backend.join("pom.xml"),
+            "<project><packaging>pom</packaging><modules><module>xingyu-starter</module></modules></project>",
+        )
+        .expect("parent pom");
+        fs::write(
+            starter.join("pom.xml"),
+            "<project><packaging>jar</packaging><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>",
+        )
+        .expect("starter pom");
+
+        let root_str = root.path().to_str().expect("root path");
+        let first = scan_project_directory(root_str).expect("first scan");
+        let second = scan_project_directory(root_str).expect("second scan");
+        assert_eq!(first.candidates.len(), 3);
+
+        let web_candidate = first
+            .candidates
+            .iter()
+            .find(|candidate| candidate.directory.ends_with("xingyu-web"))
+            .expect("web candidate");
+        assert_eq!(web_candidate.stack, TechnologyStack::Node);
+        assert_eq!(web_candidate.status, CandidateStatus::NeedsConfirmation);
+        assert_eq!(web_candidate.suggested_command.as_deref(), Some("npm run dev"));
+
+        let parent_candidate = first
+            .candidates
+            .iter()
+            .find(|candidate| candidate.directory.ends_with("xingyu-backend"))
+            .expect("parent candidate");
+        assert_eq!(parent_candidate.stack, TechnologyStack::Maven);
+        assert_eq!(parent_candidate.status, CandidateStatus::EvidenceOnly);
+        assert!(parent_candidate.suggested_command.is_none());
+
+        let starter_candidate = first
+            .candidates
+            .iter()
+            .find(|candidate| candidate.directory.ends_with("xingyu-starter"))
+            .expect("starter candidate");
+        assert_eq!(starter_candidate.stack, TechnologyStack::Maven);
+        assert_eq!(starter_candidate.status, CandidateStatus::NeedsConfirmation);
+        assert_eq!(
+            starter_candidate.suggested_command.as_deref(),
+            Some("mvn spring-boot:run")
+        );
+
+        let mut first_ids: Vec<_> = first.candidates.iter().map(|candidate| candidate.id.clone()).collect();
+        let mut second_ids: Vec<_> = second.candidates.iter().map(|candidate| candidate.id.clone()).collect();
+        first_ids.sort();
+        second_ids.sort();
+        assert_eq!(first_ids, second_ids, "candidate ids must be stable across rescans");
+    }
 }
