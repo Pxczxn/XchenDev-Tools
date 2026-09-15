@@ -1,6 +1,5 @@
 mod commands;
 mod config_import;
-mod config_transaction;
 mod history;
 mod launch_confirmation;
 mod launch_profiles;
