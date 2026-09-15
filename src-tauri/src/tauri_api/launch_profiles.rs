@@ -1,5 +1,7 @@
 use crate::app_state::AppState;
-use crate::domain::{LaunchProfile, LaunchSessionInfo, LaunchSessionState, ProcessRole};
+use crate::domain::{
+    LaunchProfile, LaunchSessionInfo, LaunchSessionState, OperationResult, ProcessRole,
+};
 use crate::security_guard;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -93,6 +95,31 @@ pub fn save_launch_profile_safe(
         port_hint: None,
     })?;
     Ok(profile_id)
+}
+
+#[tauri::command]
+pub fn remove_launch_profile_safe(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<OperationResult, String> {
+    let is_active = state.command_runner.list_sessions().iter().any(|session| {
+        session.profile_id == profile_id
+            && matches!(
+                session.state,
+                LaunchSessionState::Starting
+                    | LaunchSessionState::Running
+                    | LaunchSessionState::Stopping
+            )
+    });
+    if is_active {
+        return Err("PROFILE_RUNNING:请先停止该启动配置".to_string());
+    }
+
+    if state.config.remove_launch_profile(&profile_id)? {
+        Ok(OperationResult::succeeded("启动配置已移除"))
+    } else {
+        Ok(OperationResult::succeeded("启动配置不存在或已移除"))
+    }
 }
 
 #[tauri::command]
