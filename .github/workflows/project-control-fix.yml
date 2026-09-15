@@ -1,4 +1,4 @@
-name: One-shot Project Control Upgrade
+name: One-shot Project UI Polish
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  upgrade:
+  polish:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -23,8 +23,8 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Apply project control upgrade
-        run: python .github/scripts/project_control_patch.py
+      - name: Apply project UI polish
+        run: python .github/scripts/project_ui_patch.py
 
       - name: Install frontend dependencies
         run: npm ci
@@ -35,15 +35,15 @@ jobs:
       - name: Frontend build
         run: npm run build
 
-      - name: Commit upgrade
+      - name: Commit polish
         shell: pwsh
         run: |
           git config user.name "XchenDev"
           git config user.email "Pxczxn@163.com"
-          git add src/pages/ProjectsPage.tsx src/styles/app.css src/lib/projectRuntime.ts src/lib/projectRuntime.test.ts
+          git add src/pages/ProjectsPage.tsx src/styles/app.css
           git diff --cached --quiet
           if ($LASTEXITCODE -ne 0) {
-            git commit -m "【feat】项目管理支持统一启停与运行摘要"
+            git commit -m "【ui】优化项目管理控制台布局与视觉层级"
             git push
           } else {
             Write-Host "No changes"
