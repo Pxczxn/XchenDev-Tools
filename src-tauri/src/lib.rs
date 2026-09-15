@@ -22,7 +22,6 @@ use tauri_api::*;
 pub fn run() {
     let state = AppState::new();
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
