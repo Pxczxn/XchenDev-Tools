@@ -35,6 +35,19 @@ fn display_path(path: &Path) -> String {
         .to_string()
 }
 
+fn normalize_candidate_id(value: Option<String>) -> Option<String> {
+    value
+        .map(|candidate| candidate.trim().to_lowercase())
+        .filter(|candidate| !candidate.is_empty())
+}
+
+fn candidate_ids_match(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left.trim().eq_ignore_ascii_case(right.trim()),
+        _ => false,
+    }
+}
+
 fn validated_workdir_for_project(
     state: &AppState,
     project_id: &str,
@@ -70,6 +83,7 @@ pub fn save_launch_profile_safe(
     security_guard::validate_command_policy(&command)?;
     let working_directory =
         validated_workdir_for_project(&state, &project_id, &working_directory)?;
+    let source_candidate_id = normalize_candidate_id(source_candidate_id);
 
     let role = match process_role.to_lowercase().as_str() {
         "frontend" => ProcessRole::Frontend,
@@ -79,10 +93,10 @@ pub fn save_launch_profile_safe(
 
     let profiles = state.config.list_profiles_for_project(&project_id);
     let existing = profiles.into_iter().find(|profile| {
-        let same_candidate = source_candidate_id
-            .as_ref()
-            .zip(profile.source_candidate_id.as_ref())
-            .is_some_and(|(left, right)| left == right);
+        let same_candidate = candidate_ids_match(
+            source_candidate_id.as_deref(),
+            profile.source_candidate_id.as_deref(),
+        );
         let same_slot = profile.process_role == role
             && profile
                 .working_directory
@@ -196,4 +210,28 @@ pub fn start_launch_profile_safe(
         &canonical_workdir,
         profile.command.trim(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn candidate_id_normalization_trims_and_lowercases() {
+        assert_eq!(
+            normalize_candidate_id(Some("  CANDIDATE-AbC  ".to_string())).as_deref(),
+            Some("candidate-abc")
+        );
+        assert_eq!(normalize_candidate_id(Some("   ".to_string())), None);
+    }
+
+    #[test]
+    fn candidate_id_matching_ignores_case_and_outer_whitespace() {
+        assert!(candidate_ids_match(
+            Some("candidate-abc"),
+            Some("  CANDIDATE-ABC ")
+        ));
+        assert!(!candidate_ids_match(Some("candidate-a"), Some("candidate-b")));
+        assert!(!candidate_ids_match(Some("candidate-a"), None));
+    }
 }
