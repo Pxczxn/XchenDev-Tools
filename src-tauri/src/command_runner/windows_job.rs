@@ -20,19 +20,22 @@ use windows::Win32::Foundation::{
     CloseHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, STILL_ACTIVE, WAIT_OBJECT_0,
 };
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     SetInformationJobObject, TerminateJobObject,
 };
+#[cfg(test)]
+use windows::Win32::System::JobObjects::IsProcessInJob;
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, GetProcessId,
-    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess, ResumeThread,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, ResumeThread,
     TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject, PROCESS_INFORMATION,
-    PROCESS_QUERY_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES,
-    STARTUPINFOEXW, STARTUPINFOW, CREATE_NO_WINDOW, CREATE_SUSPENDED,
-    EXTENDED_STARTUPINFO_PRESENT, INFINITE,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, EXTENDED_STARTUPINFO_PRESENT, INFINITE,
 };
+#[cfg(test)]
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION};
 
 #[cfg(test)]
 static TEST_FORCE_JOB_TERMINATE_FAIL: AtomicBool = AtomicBool::new(false);
@@ -160,6 +163,7 @@ impl SessionJob {
             .map_err(|e| format!("TerminateJobObject: {}", e))
     }
 
+    #[cfg(test)]
     pub fn raw(&self) -> HANDLE {
         self.0 .0
     }
@@ -401,6 +405,7 @@ pub fn spawn_cmd_session(
     })
 }
 
+#[cfg(test)]
 pub fn is_pid_in_job(pid: u32, job: HANDLE) -> bool {
     let process = match unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, false, pid) } {
         Ok(h) => h,
