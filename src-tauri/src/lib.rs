@@ -1,6 +1,7 @@
 pub mod app_state;
 mod audit_log;
 mod command_runner;
+mod config_transaction;
 pub mod config_store;
 pub mod domain;
 mod environment_detector;
