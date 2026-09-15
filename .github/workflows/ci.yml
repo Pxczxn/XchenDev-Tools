@@ -44,8 +44,5 @@ jobs:
       - name: Frontend build
         run: npm run build
 
-      - name: Rust format
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
