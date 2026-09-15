@@ -7,6 +7,7 @@ import {
   listLaunchProfiles,
   listLaunchSessions,
   listProjects,
+  removeLaunchProfile,
   removeProject,
   saveLaunchProfile,
   scanProjectDirectory,
@@ -211,6 +212,17 @@ export function ProjectsPage() {
       });
       setProfiles(await listLaunchProfiles(projectId));
       setMessage("启动配置已保存");
+    } catch (e) {
+      setMessage(labelErrorText(String(e)));
+    }
+  }
+
+  async function onRemoveProfile(profile: LaunchProfile) {
+    if (!window.confirm(`移除这条启动配置？\n\n${profile.command}`)) return;
+    try {
+      await removeLaunchProfile(profile.profile_id);
+      setProfiles(await listLaunchProfiles(profile.project_id));
+      setMessage("启动配置已移除");
     } catch (e) {
       setMessage(labelErrorText(String(e)));
     }
@@ -441,9 +453,18 @@ export function ProjectsPage() {
                         {activeSession.state === "STOPPING" ? "停止中…" : "停止"}
                       </button>
                     ) : (
-                      <button type="button" onClick={() => onStart(profile)}>
-                        启动
-                      </button>
+                      <>
+                        <button type="button" onClick={() => onStart(profile)}>
+                          启动
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => void onRemoveProfile(profile)}
+                        >
+                          移除配置
+                        </button>
+                      </>
                     )}
                   </div>
                   {activeSession && (
