@@ -64,3 +64,80 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod ipc_contract_tests {
+    use std::collections::BTreeSet;
+
+    fn quoted_invoke_commands(source: &str) -> BTreeSet<String> {
+        let mut commands = BTreeSet::new();
+        let mut remaining = source;
+        for marker in ["invoke(\"", "invoke<"] {
+            // Generic invoke<T>(...) is handled below by scanning its quoted command too.
+            if marker == "invoke<" {
+                continue;
+            }
+            while let Some(start) = remaining.find(marker) {
+                let after = &remaining[start + marker.len()..];
+                if let Some(end) = after.find('"') {
+                    commands.insert(after[..end].to_string());
+                    remaining = &after[end + 1..];
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // `invoke<T>("command")` calls do not match the simple marker above.
+        let mut remaining = source;
+        while let Some(invoke_pos) = remaining.find("invoke<") {
+            let after_invoke = &remaining[invoke_pos..];
+            let Some(paren_pos) = after_invoke.find("(\"") else {
+                break;
+            };
+            let after_quote = &after_invoke[paren_pos + 2..];
+            if let Some(end) = after_quote.find('"') {
+                commands.insert(after_quote[..end].to_string());
+                remaining = &after_quote[end + 1..];
+            } else {
+                break;
+            }
+        }
+        commands
+    }
+
+    fn registered_handler_commands(source: &str) -> BTreeSet<String> {
+        let Some(start) = source.find("tauri::generate_handler![") else {
+            panic!("generate_handler block not found");
+        };
+        let block = &source[start..];
+        let Some(end) = block.find("])\n") else {
+            panic!("generate_handler block end not found");
+        };
+        block[..end]
+            .lines()
+            .skip(1)
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| line.trim_end_matches(',').to_string())
+            .filter(|line| {
+                line.chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_frontend_invoke_is_registered_in_tauri_handler() {
+        let client = include_str!("../../src/ipc/client.ts");
+        let backend = include_str!("lib.rs");
+        let invoked = quoted_invoke_commands(client);
+        let registered = registered_handler_commands(backend);
+
+        let missing: Vec<_> = invoked.difference(&registered).cloned().collect();
+        assert!(
+            missing.is_empty(),
+            "frontend invokes Tauri commands that are not registered: {missing:?}"
+        );
+    }
+}
