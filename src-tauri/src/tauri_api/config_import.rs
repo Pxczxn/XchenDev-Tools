@@ -57,8 +57,19 @@ fn logical_workdir_key(path: &str) -> String {
 }
 
 fn validate_import_projects(config: &AppConfig) -> Result<(), String> {
+    let mut project_ids = HashSet::new();
     let mut roots = HashSet::new();
     for project in &config.projects {
+        if project.project_id.trim().is_empty() {
+            return Err("PROFILE_INVALID:项目 ID 不能为空".to_string());
+        }
+        if !project_ids.insert(project.project_id.clone()) {
+            return Err(format!(
+                "PROFILE_INVALID:存在重复项目 ID {}",
+                project.project_id
+            ));
+        }
+
         let root_key = logical_workdir_key(&project.root_path);
         if root_key.is_empty() {
             return Err(format!(
@@ -77,10 +88,32 @@ fn validate_import_projects(config: &AppConfig) -> Result<(), String> {
 }
 
 fn validate_import_profiles(config: &AppConfig) -> Result<(), String> {
+    let project_ids: HashSet<&str> = config
+        .projects
+        .iter()
+        .map(|project| project.project_id.as_str())
+        .collect();
+    let mut profile_ids = HashSet::new();
     let mut slots = HashSet::new();
     let mut candidates = HashSet::new();
 
     for profile in &config.launch_profiles {
+        if profile.profile_id.trim().is_empty() {
+            return Err("PROFILE_INVALID:启动配置 ID 不能为空".to_string());
+        }
+        if !profile_ids.insert(profile.profile_id.clone()) {
+            return Err(format!(
+                "PROFILE_INVALID:存在重复启动配置 ID {}",
+                profile.profile_id
+            ));
+        }
+        if !project_ids.contains(profile.project_id.as_str()) {
+            return Err(format!(
+                "PROFILE_INVALID:启动配置 {} 引用了不存在的项目 {}",
+                profile.profile_id, profile.project_id
+            ));
+        }
+
         security_guard::validate_command_policy(profile.command.trim())?;
 
         let workdir_key = logical_workdir_key(&profile.working_directory);
@@ -220,6 +253,23 @@ mod tests {
     }
 
     #[test]
+    fn import_rejects_duplicate_project_id() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config.projects.push(ProjectInfo {
+            project_id: "project-a".to_string(),
+            name: "other".to_string(),
+            root_path: "C:\\other".to_string(),
+            created_at: "2026-09-15T00:00:00Z".to_string(),
+            updated_at: "2026-09-15T00:00:00Z".to_string(),
+        });
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("duplicate project id must fail");
+        assert!(err.contains("重复项目 ID"));
+    }
+
+    #[test]
     fn import_rejects_duplicate_project_root_variants() {
         let mut config = AppConfig::default();
         config.projects.push(project());
@@ -252,6 +302,35 @@ mod tests {
         let err = normalize_import_content(&json).expect_err("empty project root must fail");
         assert!(err.contains("PROFILE_INVALID"));
         assert!(err.contains("根目录不能为空"));
+    }
+
+    #[test]
+    fn import_rejects_duplicate_profile_id() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config
+            .launch_profiles
+            .push(profile("profile-a", "C:\\demo\\web-a", Some("candidate-a")));
+        config
+            .launch_profiles
+            .push(profile("profile-a", "C:\\demo\\web-b", Some("candidate-b")));
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("duplicate profile id must fail");
+        assert!(err.contains("重复启动配置 ID"));
+    }
+
+    #[test]
+    fn import_rejects_orphan_profile_project_reference() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        let mut orphan = profile("profile-a", "C:\\demo\\web", Some("candidate-a"));
+        orphan.project_id = "project-missing".to_string();
+        config.launch_profiles.push(orphan);
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("orphan profile must fail");
+        assert!(err.contains("引用了不存在的项目"));
     }
 
     #[test]
