@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "../components/PageHeader";
 import {
   controlWindowsService,
@@ -52,27 +52,39 @@ export function ServicesPage() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [managedKinds, setManagedKinds] = useState<string[]>(["mysql", "redis"]);
+  const requestGenerationRef = useRef(0);
 
   const refreshServices = useCallback(async (clearMessage: boolean): Promise<boolean> => {
+    const generation = requestGenerationRef.current + 1;
+    requestGenerationRef.current = generation;
     setLoading(true);
     if (clearMessage) setMessage(null);
     try {
       const settings = await getAppSettings();
+      if (generation !== requestGenerationRef.current) return false;
       const kinds = normalizeManagedServiceKinds(settings.managed_service_kinds);
+      const nextServices = await listManagedServices();
+      if (generation !== requestGenerationRef.current) return false;
       setManagedKinds(kinds);
-      setServices(await listManagedServices());
+      setServices(nextServices);
       return true;
     } catch (e) {
+      if (generation !== requestGenerationRef.current) return false;
       setMessage(labelErrorText(String(e)));
       setServices([]);
       return false;
     } finally {
-      setLoading(false);
+      if (generation === requestGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     void refreshServices(true);
+    return () => {
+      requestGenerationRef.current += 1;
+    };
   }, [refreshServices]);
 
   async function onRefresh() {
@@ -148,7 +160,7 @@ export function ServicesPage() {
               <div className="list-card-actions">
                 <button
                   type="button"
-                  disabled={!svc.can_control}
+                  disabled={!svc.can_control || loading}
                   onClick={() => onControl(svc, "start")}
                 >
                   启动
@@ -156,7 +168,7 @@ export function ServicesPage() {
                 <button
                   type="button"
                   className="secondary"
-                  disabled={!svc.can_control}
+                  disabled={!svc.can_control || loading}
                   onClick={() => onControl(svc, "stop")}
                 >
                   停止
@@ -164,7 +176,7 @@ export function ServicesPage() {
                 <button
                   type="button"
                   className="secondary"
-                  disabled={!svc.can_control}
+                  disabled={!svc.can_control || loading}
                   onClick={() => onControl(svc, "restart")}
                 >
                   重启
