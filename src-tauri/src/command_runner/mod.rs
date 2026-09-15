@@ -4,11 +4,13 @@
 
 use crate::domain::{LaunchSessionInfo, LaunchSessionState};
 use crate::process_manager::process_start_time_secs;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
+
+const MAX_TERMINAL_SESSIONS: usize = 64;
 
 #[cfg(windows)]
 mod windows_job;
@@ -74,6 +76,7 @@ pub struct CommandRunnerState {
 struct Inner {
     sessions: Mutex<HashMap<String, LaunchSession>>,
     profile_running: Mutex<HashMap<String, String>>,
+    terminal_sessions: Mutex<VecDeque<String>>,
 }
 
 impl CommandRunnerState {
@@ -82,6 +85,7 @@ impl CommandRunnerState {
             inner: Arc::new(Inner {
                 sessions: Mutex::new(HashMap::new()),
                 profile_running: Mutex::new(HashMap::new()),
+                terminal_sessions: Mutex::new(VecDeque::new()),
             }),
         }
     }
@@ -467,6 +471,40 @@ fn wait_on_process(
     }
 }
 
+fn remember_terminal_session(runner: &CommandRunnerState, session_id: &str) {
+    let evicted = {
+        let mut terminal = runner.inner.terminal_sessions.lock().unwrap();
+        if terminal.iter().any(|id| id == session_id) {
+            return;
+        }
+        terminal.push_back(session_id.to_string());
+        let mut evicted = Vec::new();
+        while terminal.len() > MAX_TERMINAL_SESSIONS {
+            if let Some(id) = terminal.pop_front() {
+                evicted.push(id);
+            }
+        }
+        evicted
+    };
+
+    if evicted.is_empty() {
+        return;
+    }
+
+    let mut sessions = runner.inner.sessions.lock().unwrap();
+    for id in evicted {
+        let is_terminal = sessions.get(&id).is_some_and(|session| {
+            matches!(
+                session.info.state,
+                LaunchSessionState::Stopped | LaunchSessionState::Failed
+            )
+        });
+        if is_terminal {
+            sessions.remove(&id);
+        }
+    }
+}
+
 fn publish_terminal_session(
     runner: &CommandRunnerState,
     session_id: &str,
@@ -482,24 +520,34 @@ fn publish_terminal_session(
         .remove(profile_id);
 
     #[cfg(windows)]
-    let _job_released = {
+    let (job_released, published) = {
         let mut guard = runner.inner.sessions.lock().unwrap();
         if let Some(session) = guard.get_mut(session_id) {
             session.info.state = final_state;
             session.info.exit_code = exit_code;
-            session.job.take()
+            (session.job.take(), true)
         } else {
-            None
+            (None, false)
         }
     };
 
+    #[cfg(windows)]
+    drop(job_released);
+
     #[cfg(not(windows))]
-    {
+    let published = {
         let mut guard = runner.inner.sessions.lock().unwrap();
         if let Some(session) = guard.get_mut(session_id) {
             session.info.state = final_state;
             session.info.exit_code = exit_code;
+            true
+        } else {
+            false
         }
+    };
+
+    if published {
+        remember_terminal_session(runner, session_id);
     }
 
     exit_code
@@ -571,6 +619,41 @@ impl CommandRunnerState {
             .expect("session")
             .direct_child
             .start_time_secs = wrong_start_time_secs;
+    }
+
+    fn test_insert_session_with_state(&self, session_id: &str, state: LaunchSessionState) {
+        let info = LaunchSessionInfo {
+            launch_session_id: session_id.to_string(),
+            profile_id: format!("profile-{session_id}"),
+            pid: None,
+            state,
+            exit_code: None,
+        };
+        let direct_child = DirectChildIdentity {
+            pid: 0,
+            start_time_secs: 0,
+        };
+
+        #[cfg(windows)]
+        let session = LaunchSession {
+            info,
+            job: None,
+            process: None,
+            direct_child,
+        };
+
+        #[cfg(not(windows))]
+        let session = LaunchSession {
+            info,
+            child: None,
+            direct_child,
+        };
+
+        self.inner
+            .sessions
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), session);
     }
 
     fn start_for_test(
@@ -704,6 +787,55 @@ mod tests {
             "session {:?} did not reach terminal state within {:?}",
             session_id, timeout
         );
+    }
+
+    #[test]
+    fn terminal_session_history_is_bounded() {
+        let runner = CommandRunnerState::new();
+        let total = MAX_TERMINAL_SESSIONS + 5;
+        let ids: Vec<String> = (0..total)
+            .map(|index| format!("terminal-{index}"))
+            .collect();
+
+        for id in &ids {
+            runner.test_insert_session_with_state(id, LaunchSessionState::Stopped);
+            remember_terminal_session(&runner, id);
+        }
+
+        assert_eq!(
+            runner.inner.terminal_sessions.lock().unwrap().len(),
+            MAX_TERMINAL_SESSIONS
+        );
+        assert!(runner.get(&ids[0]).is_none());
+        assert!(runner.get(&ids[total - 1]).is_some());
+        assert_eq!(
+            runner
+                .list_sessions()
+                .into_iter()
+                .filter(|session| matches!(
+                    session.state,
+                    LaunchSessionState::Stopped | LaunchSessionState::Failed
+                ))
+                .count(),
+            MAX_TERMINAL_SESSIONS
+        );
+    }
+
+    #[test]
+    fn active_session_is_never_pruned_by_terminal_history() {
+        let runner = CommandRunnerState::new();
+        let active_id = "active-session";
+        runner.test_insert_session_with_state(active_id, LaunchSessionState::Running);
+
+        for index in 0..(MAX_TERMINAL_SESSIONS + 8) {
+            let id = format!("terminal-with-active-{index}");
+            runner.test_insert_session_with_state(&id, LaunchSessionState::Stopped);
+            remember_terminal_session(&runner, &id);
+        }
+
+        let active = runner.get(active_id).expect("active session must remain");
+        assert_eq!(active.state, LaunchSessionState::Running);
+        assert_eq!(runner.list_sessions().len(), MAX_TERMINAL_SESSIONS + 1);
     }
 
     #[test]
