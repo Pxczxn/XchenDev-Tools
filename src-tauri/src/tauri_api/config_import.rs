@@ -1,10 +1,10 @@
 use crate::app_state::AppState;
 use crate::config_store::AppConfig;
+use crate::config_transaction::with_config_rollback;
 use crate::domain::{LaunchSessionState, OperationResult};
 use crate::settings_guard::normalize_settings;
 use tauri::State;
 
-use super::config_transaction::with_config_rollback;
 use super::launch_profiles::launch_lifecycle_lock;
 
 fn lock_launch_lifecycle() -> Result<std::sync::MutexGuard<'static, ()>, String> {
