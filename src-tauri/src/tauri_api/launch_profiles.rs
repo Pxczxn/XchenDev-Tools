@@ -3,7 +3,7 @@ use crate::domain::{
     LaunchProfile, LaunchSessionInfo, LaunchSessionState, OperationResult, ProcessRole,
 };
 use crate::security_guard;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use tauri::State;
 use uuid::Uuid;
@@ -11,6 +11,21 @@ use uuid::Uuid;
 fn launch_start_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn canonical_directory(path: &str, error_code: &str) -> Result<PathBuf, String> {
+    let canonical = std::fs::canonicalize(Path::new(path))
+        .map_err(|_| format!("{}:目录不存在", error_code))?;
+    if !canonical.is_dir() {
+        return Err(format!("{}:路径不是目录", error_code));
+    }
+    Ok(canonical)
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_string()
 }
 
 #[tauri::command]
@@ -25,20 +40,19 @@ pub fn save_launch_profile_safe(
     let command = command.trim().to_string();
     security_guard::validate_command_policy(&command)?;
 
-    let working_directory = std::fs::canonicalize(Path::new(&working_directory))
-        .map_err(|_| "WORKDIR_INVALID:工作目录不存在".to_string())?
-        .to_string_lossy()
-        .trim_start_matches(r"\\?\")
-        .to_string();
-
-    if !state
+    let project = state
         .config
         .list_projects()
-        .iter()
-        .any(|project| project.project_id == project_id)
-    {
-        return Err("PROJECT_NOT_FOUND:请先添加项目".to_string());
+        .into_iter()
+        .find(|project| project.project_id == project_id)
+        .ok_or_else(|| "PROJECT_NOT_FOUND:请先添加项目".to_string())?;
+
+    let project_root = canonical_directory(&project.root_path, "PROJECT_ROOT_INVALID")?;
+    let working_directory_path = canonical_directory(&working_directory, "WORKDIR_INVALID")?;
+    if !working_directory_path.starts_with(&project_root) {
+        return Err("WORKDIR_OUTSIDE_PROJECT:工作目录必须位于当前项目根目录内".to_string());
     }
+    let working_directory = display_path(&working_directory_path);
 
     let role = match process_role.to_lowercase().as_str() {
         "frontend" => ProcessRole::Frontend,
