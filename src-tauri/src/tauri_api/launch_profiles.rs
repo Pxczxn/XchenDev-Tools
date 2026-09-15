@@ -8,9 +8,15 @@ use std::sync::{Mutex, OnceLock};
 use tauri::State;
 use uuid::Uuid;
 
-fn launch_start_lock() -> &'static Mutex<()> {
+pub(crate) fn launch_lifecycle_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn lock_launch_lifecycle() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    launch_lifecycle_lock()
+        .lock()
+        .map_err(|_| "LAUNCH_LIFECYCLE_LOCK_FAILED:启动关系锁失败".to_string())
 }
 
 fn canonical_directory(path: &str, error_code: &str) -> Result<PathBuf, String> {
@@ -57,6 +63,8 @@ pub fn save_launch_profile_safe(
     command: String,
     source_candidate_id: Option<String>,
 ) -> Result<String, String> {
+    let _lifecycle_guard = lock_launch_lifecycle()?;
+
     let command = command.trim().to_string();
     security_guard::validate_command_policy(&command)?;
     let working_directory =
@@ -124,6 +132,8 @@ pub fn remove_launch_profile_safe(
     state: State<'_, AppState>,
     profile_id: String,
 ) -> Result<OperationResult, String> {
+    let _lifecycle_guard = lock_launch_lifecycle()?;
+
     let is_active = state.command_runner.list_sessions().iter().any(|session| {
         session.profile_id == profile_id
             && matches!(
@@ -151,9 +161,7 @@ pub fn start_launch_profile_safe(
     profile_id: String,
     confirmation_token: String,
 ) -> Result<LaunchSessionInfo, String> {
-    let _start_guard = launch_start_lock()
-        .lock()
-        .map_err(|_| "LAUNCH_START_FAILED:启动锁失败".to_string())?;
+    let _lifecycle_guard = lock_launch_lifecycle()?;
 
     let profile = state
         .config
