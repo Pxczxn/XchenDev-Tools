@@ -143,6 +143,12 @@ export interface WindowsServiceInfo {
   status_reason?: string;
 }
 
+export interface ServiceControlConfirmation {
+  confirmation_token: string;
+  binding_summary: string;
+  expires_at: string;
+}
+
 export interface RuntimeItem {
   dto_version: number;
   id: string;
