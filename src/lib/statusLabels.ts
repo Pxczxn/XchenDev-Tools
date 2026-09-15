@@ -69,6 +69,7 @@ const STATUS_LABELS: Record<string, string> = {
   PATH_NOT_FOUND: "路径不存在",
   EXECUTABLE_INVALID: "可执行文件无效",
   RUNTIME_KIND_INVALID: "运行时类型无效",
+  RUNTIME_DISABLED: "运行时已禁用",
   DETECT_PERMISSION_DENIED: "检测权限不足",
   DETECT_IO_ERROR: "检测 IO 错误",
   PORT_INVALID: "端口无效",
