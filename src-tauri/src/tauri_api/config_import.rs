@@ -56,6 +56,26 @@ fn logical_workdir_key(path: &str) -> String {
         .to_lowercase()
 }
 
+fn validate_import_projects(config: &AppConfig) -> Result<(), String> {
+    let mut roots = HashSet::new();
+    for project in &config.projects {
+        let root_key = logical_workdir_key(&project.root_path);
+        if root_key.is_empty() {
+            return Err(format!(
+                "PROFILE_INVALID:项目 {} 的根目录不能为空",
+                project.project_id
+            ));
+        }
+        if !roots.insert(root_key) {
+            return Err(format!(
+                "PROFILE_INVALID:存在重复项目根目录 {}",
+                project.root_path
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_import_profiles(config: &AppConfig) -> Result<(), String> {
     let mut slots = HashSet::new();
     let mut candidates = HashSet::new();
@@ -109,6 +129,7 @@ fn normalize_import_content(content: &str) -> Result<String, String> {
     let mut parsed: AppConfig =
         serde_json::from_str(content).map_err(|e| format!("PROFILE_INVALID:{}", e))?;
     parsed.settings = normalize_settings(parsed.settings)?;
+    validate_import_projects(&parsed)?;
     validate_import_profiles(&parsed)?;
     prune_config_history(&mut parsed, Utc::now());
     serde_json::to_string_pretty(&parsed).map_err(|e| format!("PROFILE_INVALID:{}", e))
@@ -196,6 +217,41 @@ mod tests {
         let parsed: AppConfig = serde_json::from_str(&normalized).expect("deserialize");
         assert_eq!(parsed.settings.theme, "dark");
         assert_eq!(parsed.settings.disabled_runtime_kinds, vec!["java"]);
+    }
+
+    #[test]
+    fn import_rejects_duplicate_project_root_variants() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config.projects.push(ProjectInfo {
+            project_id: "project-b".to_string(),
+            name: "same-root".to_string(),
+            root_path: "c:/DEMO/".to_string(),
+            created_at: "2026-09-15T00:00:00Z".to_string(),
+            updated_at: "2026-09-15T00:00:00Z".to_string(),
+        });
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("duplicate roots must fail");
+        assert!(err.contains("PROFILE_INVALID"));
+        assert!(err.contains("重复项目根目录"));
+    }
+
+    #[test]
+    fn import_rejects_empty_project_root() {
+        let mut config = AppConfig::default();
+        config.projects.push(ProjectInfo {
+            project_id: "project-empty".to_string(),
+            name: "empty".to_string(),
+            root_path: "  ".to_string(),
+            created_at: "2026-09-15T00:00:00Z".to_string(),
+            updated_at: "2026-09-15T00:00:00Z".to_string(),
+        });
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("empty project root must fail");
+        assert!(err.contains("PROFILE_INVALID"));
+        assert!(err.contains("根目录不能为空"));
     }
 
     #[test]
