@@ -90,10 +90,10 @@ function terminalState(
   event: TerminalEvent,
   currentState?: string,
 ): string {
+  if (event.finalState) return event.finalState;
   if (currentState === "STOPPING") return "STOPPED";
-  if (event.finalState === "FAILED") return "FAILED";
   if (event.exitCode !== undefined && event.exitCode !== 0) return "FAILED";
-  return event.finalState ?? "STOPPED";
+  return "STOPPED";
 }
 
 function sessionBadgeClass(session: LaunchSessionInfo): string {
@@ -193,8 +193,6 @@ export function ProjectsPage() {
         .then((sessions) => {
           if (disposed) return;
           const activeLastSessions = indexLastSessions(sessions);
-          // The IPC intentionally returns active sessions only. Merge those into the
-          // page-local map so the last terminal session (and its logs) stays visible.
           setSessionsById((prev) => ({ ...prev, ...indexSessions(sessions) }));
           if (Object.keys(activeLastSessions).length > 0) {
             const nextLastSessions = {
@@ -449,6 +447,9 @@ export function ProjectsPage() {
           onChange={(e) => {
             setRootPath(e.target.value);
             setProjectId("");
+            setProfiles([]);
+            setCandidates([]);
+            setSelected(null);
           }}
           placeholder="项目根目录"
         />
