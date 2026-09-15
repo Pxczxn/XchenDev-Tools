@@ -1,9 +1,9 @@
 use crate::app_state::AppState;
+use crate::config_transaction::with_config_rollback;
 use crate::domain::{LaunchSessionState, OperationResult, ProjectInfo};
 use std::collections::HashSet;
 use tauri::State;
 
-use super::config_transaction::with_config_rollback;
 use super::launch_profiles::launch_lifecycle_lock;
 
 #[tauri::command]
