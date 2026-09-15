@@ -26,6 +26,7 @@ import { labelErrorText, labelStatus } from "../lib/statusLabels";
 
 const ACTIVE_SESSION_STATES = new Set(["STARTING", "RUNNING", "STOPPING"]);
 const MAX_PENDING_TERMINAL_EVENTS = 64;
+const MAX_LOG_LINES_PER_SESSION = 2000;
 
 type SessionsById = Record<string, LaunchSessionInfo>;
 type LogsBySessionId = Record<string, string[]>;
@@ -59,6 +60,16 @@ function rememberPendingTerminalEvent(
     }
   }
   cache[sessionId] = event;
+}
+
+function appendSessionLog(existing: string[], line: string): string[] {
+  if (existing.length < MAX_LOG_LINES_PER_SESSION) {
+    return [...existing, line];
+  }
+  return [
+    ...existing.slice(existing.length - MAX_LOG_LINES_PER_SESSION + 1),
+    line,
+  ];
 }
 
 function activeSessionForProfile(
@@ -110,6 +121,7 @@ export function ProjectsPage() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const terminalEventsRef = useRef<Record<string, TerminalEvent>>({});
+  const lastSessionByProfileRef = useRef<LastSessionByProfile>({});
 
   async function refreshProjects() {
     setProjects(await listProjects());
@@ -121,9 +133,11 @@ export function ProjectsPage() {
     void Promise.all([listProjects(), listLaunchSessions()])
       .then(([savedProjects, sessions]) => {
         if (disposed) return;
+        const indexedLastSessions = indexLastSessions(sessions);
         setProjects(savedProjects);
         setSessionsById(indexSessions(sessions));
-        setLastSessionByProfile(indexLastSessions(sessions));
+        lastSessionByProfileRef.current = indexedLastSessions;
+        setLastSessionByProfile(indexedLastSessions);
       })
       .catch((e) => {
         if (!disposed) setMessage(labelErrorText(String(e)));
@@ -144,7 +158,10 @@ export function ProjectsPage() {
 
       setLogsBySessionId((prev) => ({
         ...prev,
-        [p.launchSessionId]: [...(prev[p.launchSessionId] ?? []), line],
+        [p.launchSessionId]: appendSessionLog(
+          prev[p.launchSessionId] ?? [],
+          line,
+        ),
       }));
 
       if (!p.final) return;
@@ -175,13 +192,18 @@ export function ProjectsPage() {
       void listLaunchSessions()
         .then((sessions) => {
           if (disposed) return;
+          const activeLastSessions = indexLastSessions(sessions);
           // The IPC intentionally returns active sessions only. Merge those into the
           // page-local map so the last terminal session (and its logs) stays visible.
           setSessionsById((prev) => ({ ...prev, ...indexSessions(sessions) }));
-          setLastSessionByProfile((prev) => ({
-            ...prev,
-            ...indexLastSessions(sessions),
-          }));
+          if (Object.keys(activeLastSessions).length > 0) {
+            const nextLastSessions = {
+              ...lastSessionByProfileRef.current,
+              ...activeLastSessions,
+            };
+            lastSessionByProfileRef.current = nextLastSessions;
+            setLastSessionByProfile(nextLastSessions);
+          }
         })
         .catch(() => {
           // Keep the event-derived terminal state if the refresh fails.
@@ -312,19 +334,41 @@ export function ProjectsPage() {
             exit_code: pendingTerminal.exitCode ?? info.exit_code,
           }
         : info;
-
-      setSessionsById((prev) => ({
-        ...prev,
-        [info.launch_session_id]: resolvedInfo,
-      }));
-      setLastSessionByProfile((prev) => ({
-        ...prev,
+      const previousSessionId =
+        lastSessionByProfileRef.current[profile.profile_id];
+      const nextLastSessions = {
+        ...lastSessionByProfileRef.current,
         [profile.profile_id]: info.launch_session_id,
-      }));
-      setLogsBySessionId((prev) => ({
-        ...prev,
-        [info.launch_session_id]: prev[info.launch_session_id] ?? [],
-      }));
+      };
+      lastSessionByProfileRef.current = nextLastSessions;
+
+      setSessionsById((prev) => {
+        const next = {
+          ...prev,
+          [info.launch_session_id]: resolvedInfo,
+        };
+        if (
+          previousSessionId &&
+          previousSessionId !== info.launch_session_id
+        ) {
+          delete next[previousSessionId];
+        }
+        return next;
+      });
+      setLastSessionByProfile(nextLastSessions);
+      setLogsBySessionId((prev) => {
+        const next = {
+          ...prev,
+          [info.launch_session_id]: prev[info.launch_session_id] ?? [],
+        };
+        if (
+          previousSessionId &&
+          previousSessionId !== info.launch_session_id
+        ) {
+          delete next[previousSessionId];
+        }
+        return next;
+      });
       if (pendingTerminal) {
         delete terminalEventsRef.current[info.launch_session_id];
       }
