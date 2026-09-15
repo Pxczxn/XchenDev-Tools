@@ -13,6 +13,8 @@ use uuid::Uuid;
 const ENV_DETECTION_CACHE_TTL: Duration = Duration::from_secs(120);
 pub const LAUNCH_CONFIRMATION_TTL_SECS: i64 = 120;
 pub const PROCESS_CONFIRMATION_TTL_SECS: i64 = 60;
+const MAX_PENDING_LAUNCH_CONFIRMATIONS: usize = 256;
+const MAX_PENDING_PROCESS_CONFIRMATIONS: usize = 256;
 
 #[derive(Clone)]
 struct EnvironmentDetectionCache {
@@ -43,6 +45,25 @@ pub struct PendingConfirmation {
 struct PendingProcessConfirmation {
     binding_digest: String,
     created_at: DateTime<Utc>,
+}
+
+fn make_room_for_pending<T, F>(
+    map: &mut HashMap<String, T>,
+    max_entries: usize,
+    created_at_millis: F,
+) where
+    F: Fn(&T) -> i64,
+{
+    while !map.is_empty() && map.len() >= max_entries {
+        let oldest = map
+            .iter()
+            .min_by_key(|(_, item)| created_at_millis(item))
+            .map(|(token, _)| token.clone());
+        let Some(token) = oldest else {
+            break;
+        };
+        map.remove(&token);
+    }
 }
 
 impl AppState {
@@ -137,12 +158,16 @@ impl AppState {
             .lock()
             .map_err(|_| "CONFIRMATION_ISSUE_FAILED:锁失败".to_string())?;
         confirmations.retain(|_, item| {
-            !item.consumed
-                && Utc::now()
-                    .signed_duration_since(item.created_at)
-                    .num_seconds()
-                    <= LAUNCH_CONFIRMATION_TTL_SECS
+            let age = Utc::now()
+                .signed_duration_since(item.created_at)
+                .num_seconds();
+            !item.consumed && age >= 0 && age <= LAUNCH_CONFIRMATION_TTL_SECS
         });
+        make_room_for_pending(
+            &mut confirmations,
+            MAX_PENDING_LAUNCH_CONFIRMATIONS,
+            |item| item.created_at.timestamp_millis(),
+        );
         confirmations.insert(token.clone(), pending);
         Ok((token, summary))
     }
@@ -226,6 +251,11 @@ impl AppState {
                 .num_seconds();
             age >= 0 && age <= PROCESS_CONFIRMATION_TTL_SECS
         });
+        make_room_for_pending(
+            &mut map,
+            MAX_PENDING_PROCESS_CONFIRMATIONS,
+            |item| item.created_at.timestamp_millis(),
+        );
         map.insert(token.clone(), pending);
         let action = if mode.eq_ignore_ascii_case("force") {
             "强制终止"
@@ -323,6 +353,36 @@ mod tests {
         assert!(state
             .consume_confirmation(&token, "p", "echo ok", ".", "frontend")
             .is_err());
+    }
+
+    #[test]
+    fn pending_confirmation_limit_evicts_oldest_entries() {
+        #[derive(Clone)]
+        struct Item(i64);
+
+        let mut map = HashMap::new();
+        map.insert("old".to_string(), Item(1));
+        map.insert("new".to_string(), Item(2));
+        make_room_for_pending(&mut map, 2, |item| item.0);
+        assert_eq!(map.len(), 1);
+        assert!(!map.contains_key("old"));
+        assert!(map.contains_key("new"));
+    }
+
+    #[test]
+    fn launch_confirmations_are_bounded() {
+        let state = AppState::new();
+        for index in 0..(MAX_PENDING_LAUNCH_CONFIRMATIONS + 16) {
+            state
+                .issue_confirmation(
+                    &format!("profile-{index}"),
+                    "echo ok",
+                    ".",
+                    "frontend",
+                )
+                .unwrap();
+        }
+        assert!(state.confirmations.lock().unwrap().len() <= MAX_PENDING_LAUNCH_CONFIRMATIONS);
     }
 
     #[test]
