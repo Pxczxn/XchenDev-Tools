@@ -122,6 +122,12 @@ export function ProjectsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const terminalEventsRef = useRef<Record<string, TerminalEvent>>({});
   const lastSessionByProfileRef = useRef<LastSessionByProfile>({});
+  const projectContextGenerationRef = useRef(0);
+
+  function invalidateProjectContext() {
+    projectContextGenerationRef.current += 1;
+    setLoading(false);
+  }
 
   async function refreshProjects() {
     setProjects(await listProjects());
@@ -217,6 +223,7 @@ export function ProjectsPage() {
   async function pickDir() {
     const picked = await open({ directory: true, multiple: false });
     if (typeof picked === "string") {
+      invalidateProjectContext();
       setRootPath(picked);
       setProjectId("");
       setProfiles([]);
@@ -227,12 +234,24 @@ export function ProjectsPage() {
   }
 
   async function openProject(project: ProjectInfo) {
+    const generation = projectContextGenerationRef.current + 1;
+    projectContextGenerationRef.current = generation;
+    setLoading(false);
     setRootPath(project.root_path);
     setProjectId(project.project_id);
     setCandidates([]);
     setSelected(null);
-    setProfiles(await listLaunchProfiles(project.project_id));
-    setMessage(`已打开项目：${project.name}`);
+    setProfiles([]);
+    try {
+      const nextProfiles = await listLaunchProfiles(project.project_id);
+      if (generation !== projectContextGenerationRef.current) return;
+      setProfiles(nextProfiles);
+      setMessage(`已打开项目：${project.name}`);
+    } catch (e) {
+      if (generation === projectContextGenerationRef.current) {
+        setMessage(labelErrorText(String(e)));
+      }
+    }
   }
 
   async function onRemoveProject(project: ProjectInfo) {
@@ -246,6 +265,7 @@ export function ProjectsPage() {
     try {
       await removeProject(project.project_id);
       if (projectId === project.project_id) {
+        invalidateProjectContext();
         setRootPath("");
         setProjectId("");
         setCandidates([]);
@@ -261,21 +281,35 @@ export function ProjectsPage() {
 
   async function onScan() {
     if (!rootPath) return;
+    const generation = projectContextGenerationRef.current + 1;
+    projectContextGenerationRef.current = generation;
+    const requestedRoot = rootPath;
     setLoading(true);
     setMessage(null);
     try {
-      const result = await scanProjectDirectory(rootPath);
+      const result = await scanProjectDirectory(requestedRoot);
+      if (generation !== projectContextGenerationRef.current) return;
       const project = await upsertProject(result.root_path);
+      if (generation !== projectContextGenerationRef.current) return;
+      const nextProfiles = await listLaunchProfiles(project.project_id);
+      if (generation !== projectContextGenerationRef.current) return;
+      const savedProjects = await listProjects();
+      if (generation !== projectContextGenerationRef.current) return;
+
       setRootPath(project.root_path);
       setProjectId(project.project_id);
       setCandidates(result.candidates);
-      setProfiles(await listLaunchProfiles(project.project_id));
-      await refreshProjects();
+      setProfiles(nextProfiles);
+      setProjects(savedProjects);
       setMessage(`项目已保存：${project.name}`);
     } catch (e) {
-      setMessage(labelErrorText(String(e)));
+      if (generation === projectContextGenerationRef.current) {
+        setMessage(labelErrorText(String(e)));
+      }
     } finally {
-      setLoading(false);
+      if (generation === projectContextGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }
 
@@ -288,23 +322,30 @@ export function ProjectsPage() {
 
   async function onSaveProfile() {
     if (!projectId || !workdir || !command) return;
+    const generation = projectContextGenerationRef.current;
+    const targetProjectId = projectId;
     try {
       await saveLaunchProfile({
-        projectId,
+        projectId: targetProjectId,
         processRole: role,
         workingDirectory: workdir,
         command,
         sourceCandidateId: selected?.id,
       });
-      setProfiles(await listLaunchProfiles(projectId));
+      const nextProfiles = await listLaunchProfiles(targetProjectId);
+      if (generation !== projectContextGenerationRef.current) return;
+      setProfiles(nextProfiles);
       setMessage("启动配置已保存");
     } catch (e) {
-      setMessage(labelErrorText(String(e)));
+      if (generation === projectContextGenerationRef.current) {
+        setMessage(labelErrorText(String(e)));
+      }
     }
   }
 
   async function onRemoveProfile(profile: LaunchProfile) {
     if (!window.confirm(`移除这条启动配置？\n\n${profile.command}`)) return;
+    const generation = projectContextGenerationRef.current;
     try {
       await removeLaunchProfile(profile.profile_id);
       const lastSessionId = lastSessionByProfileRef.current[profile.profile_id];
@@ -327,10 +368,14 @@ export function ProjectsPage() {
         delete terminalEventsRef.current[lastSessionId];
       }
 
-      setProfiles(await listLaunchProfiles(profile.project_id));
+      const nextProfiles = await listLaunchProfiles(profile.project_id);
+      if (generation !== projectContextGenerationRef.current) return;
+      setProfiles(nextProfiles);
       setMessage("启动配置已移除");
     } catch (e) {
-      setMessage(labelErrorText(String(e)));
+      if (generation === projectContextGenerationRef.current) {
+        setMessage(labelErrorText(String(e)));
+      }
     }
   }
 
@@ -465,6 +510,7 @@ export function ProjectsPage() {
           className="env-path-input"
           value={rootPath}
           onChange={(e) => {
+            invalidateProjectContext();
             setRootPath(e.target.value);
             setProjectId("");
             setProfiles([]);
