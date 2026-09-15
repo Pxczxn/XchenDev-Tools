@@ -159,8 +159,9 @@ fn build_candidate(
                 // 聚合/父 POM 本身通常不可直接运行。继续向下扫描真实启动模块。
                 (CandidateStatus::EvidenceOnly, None)
             } else if is_spring_boot_module {
+                // 插件证据足以给出建议，但多模块依赖是否可从该目录直接解析仍需用户确认。
                 (
-                    CandidateStatus::Ready,
+                    CandidateStatus::NeedsConfirmation,
                     Some(format!("{} spring-boot:run", runner)),
                 )
             } else {
@@ -318,6 +319,7 @@ mod tests {
         assert_eq!(result.scan_depth, MAX_SCAN_DEPTH);
         assert_eq!(result.candidates.len(), 1);
         assert!(result.candidates[0].directory.ends_with("starter"));
+        assert_eq!(result.candidates[0].status, CandidateStatus::NeedsConfirmation);
         assert_eq!(
             result.candidates[0].suggested_command.as_deref(),
             Some("mvn spring-boot:run")
@@ -340,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn spring_boot_maven_module_is_ready() {
+    fn spring_boot_maven_module_requires_confirmation() {
         let root = tempdir().expect("tempdir");
         fs::write(
             root.path().join("pom.xml"),
@@ -350,7 +352,7 @@ mod tests {
 
         let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
         let candidate = result.candidates.first().expect("candidate");
-        assert_eq!(candidate.status, CandidateStatus::Ready);
+        assert_eq!(candidate.status, CandidateStatus::NeedsConfirmation);
         assert_eq!(candidate.suggested_command.as_deref(), Some("mvn spring-boot:run"));
     }
 }
