@@ -28,10 +28,17 @@ const ACTIVE_SESSION_STATES = new Set(["STARTING", "RUNNING", "STOPPING"]);
 
 type SessionsById = Record<string, LaunchSessionInfo>;
 type LogsBySessionId = Record<string, string[]>;
+type LastSessionByProfile = Record<string, string>;
 
 function indexSessions(sessions: LaunchSessionInfo[]): SessionsById {
   return Object.fromEntries(
     sessions.map((session) => [session.launch_session_id, session]),
+  );
+}
+
+function indexLastSessions(sessions: LaunchSessionInfo[]): LastSessionByProfile {
+  return Object.fromEntries(
+    sessions.map((session) => [session.profile_id, session.launch_session_id]),
   );
 }
 
@@ -49,6 +56,14 @@ function suggestedRole(candidate: TechnologyCandidate): "frontend" | "backend" {
   return candidate.stack.toUpperCase() === "NODE" ? "frontend" : "backend";
 }
 
+function sessionBadgeClass(session: LaunchSessionInfo): string {
+  if (ACTIVE_SESSION_STATES.has(session.state)) return "env-badge ok";
+  if (session.state === "FAILED" || (session.exit_code ?? 0) !== 0) {
+    return "env-badge err";
+  }
+  return "env-badge muted";
+}
+
 export function ProjectsPage() {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [rootPath, setRootPath] = useState("");
@@ -60,6 +75,8 @@ export function ProjectsPage() {
   const [command, setCommand] = useState("");
   const [workdir, setWorkdir] = useState("");
   const [sessionsById, setSessionsById] = useState<SessionsById>({});
+  const [lastSessionByProfile, setLastSessionByProfile] =
+    useState<LastSessionByProfile>({});
   const [logsBySessionId, setLogsBySessionId] = useState<LogsBySessionId>({});
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -76,6 +93,7 @@ export function ProjectsPage() {
         if (disposed) return;
         setProjects(savedProjects);
         setSessionsById(indexSessions(sessions));
+        setLastSessionByProfile(indexLastSessions(sessions));
       })
       .catch((e) => {
         if (!disposed) setMessage(labelErrorText(String(e)));
@@ -87,6 +105,7 @@ export function ProjectsPage() {
       chunk: string;
       final?: boolean;
       exitCode?: number;
+      finalState?: string;
     }>("launch_output", (event) => {
       const p = event.payload;
       const line = p.final
@@ -103,11 +122,15 @@ export function ProjectsPage() {
       setSessionsById((prev) => {
         const current = prev[p.launchSessionId];
         if (!current) return prev;
+        setLastSessionByProfile((last) => ({
+          ...last,
+          [current.profile_id]: current.launch_session_id,
+        }));
         return {
           ...prev,
           [p.launchSessionId]: {
             ...current,
-            state: "STOPPED",
+            state: p.finalState ?? "STOPPED",
             exit_code: p.exitCode ?? current.exit_code,
           },
         };
@@ -115,7 +138,14 @@ export function ProjectsPage() {
 
       void listLaunchSessions()
         .then((sessions) => {
-          if (!disposed) setSessionsById(indexSessions(sessions));
+          if (disposed) return;
+          // The IPC intentionally returns active sessions only. Merge those into the
+          // page-local map so the last terminal session (and its logs) stays visible.
+          setSessionsById((prev) => ({ ...prev, ...indexSessions(sessions) }));
+          setLastSessionByProfile((prev) => ({
+            ...prev,
+            ...indexLastSessions(sessions),
+          }));
         })
         .catch(() => {
           // Keep the event-derived terminal state if the refresh fails.
@@ -241,6 +271,10 @@ export function ProjectsPage() {
       setSessionsById((prev) => ({
         ...prev,
         [info.launch_session_id]: info,
+      }));
+      setLastSessionByProfile((prev) => ({
+        ...prev,
+        [profile.profile_id]: info.launch_session_id,
       }));
       setLogsBySessionId((prev) => ({
         ...prev,
@@ -419,8 +453,11 @@ export function ProjectsPage() {
                 sessionsById,
                 profile.profile_id,
               );
-              const sessionLogs = activeSession
-                ? logsBySessionId[activeSession.launch_session_id] ?? []
+              const lastSessionId = lastSessionByProfile[profile.profile_id];
+              const displaySession =
+                activeSession ?? (lastSessionId ? sessionsById[lastSessionId] : undefined);
+              const sessionLogs = displaySession
+                ? logsBySessionId[displaySession.launch_session_id] ?? []
                 : [];
 
               return (
@@ -429,9 +466,13 @@ export function ProjectsPage() {
                     <span className="env-badge muted">
                       {labelStatus(profile.process_role)}
                     </span>
-                    {activeSession && (
-                      <span className="env-badge ok">
-                        {labelStatus(activeSession.state)} · PID {activeSession.pid ?? "—"}
+                    {displaySession && (
+                      <span className={sessionBadgeClass(displaySession)}>
+                        {labelStatus(displaySession.state)} · PID {displaySession.pid ?? "—"}
+                        {displaySession.exit_code !== undefined &&
+                        displaySession.exit_code !== null
+                          ? ` · 退出码 ${displaySession.exit_code}`
+                          : ""}
                       </span>
                     )}
                   </div>
@@ -467,7 +508,7 @@ export function ProjectsPage() {
                       </>
                     )}
                   </div>
-                  {activeSession && (
+                  {displaySession && (
                     <div className="log-panel">
                       {sessionLogs.join("\n") || "暂无输出"}
                     </div>
