@@ -246,15 +246,17 @@ pub fn directory_matches_prefix(cwd: &str, root: &std::path::Path) -> Option<u8>
         return Some(1);
     }
 
-    // Use path components instead of string prefix matching. This prevents a root such as
-    // `C:\work\foo` from matching the unrelated sibling `C:\work\foobar`.
+    // Use canonical path components instead of string-prefix matching. This keeps unrelated
+    // siblings such as `C:\\work\\foo` and `C:\\work\\foobar` separate while allowing
+    // real project processes to run from nested module directories.
     let relative = cwd_path.strip_prefix(root).ok()?;
     let depth = relative.components().count();
-    if depth == 1 {
-        Some(2)
-    } else {
-        None
+    if depth == 0 {
+        return Some(1);
     }
+
+    // match_level is a compact UI hint. Saturate extremely deep paths instead of wrapping u8.
+    Some(depth.saturating_add(1).min(u8::MAX as usize) as u8)
 }
 
 #[cfg(test)]
@@ -263,7 +265,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn directory_match_accepts_root_and_one_child_only() {
+    fn directory_match_accepts_nested_project_directories_with_real_depth() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("foo");
         let child = root.join("child");
@@ -281,7 +283,7 @@ mod tests {
         );
         assert_eq!(
             directory_matches_prefix(grandchild.to_str().expect("grandchild"), &canonical_root),
-            None
+            Some(3)
         );
     }
 
