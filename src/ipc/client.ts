@@ -81,13 +81,13 @@ export async function exportAppConfig(): Promise<string> {
 }
 
 export async function importAppConfig(content: string): Promise<OperationResult> {
-  return invoke("import_app_config", { content });
+  return invoke("import_app_config_safe", { content });
 }
 
 export async function importAppConfigFromPath(
   sourcePath: string,
 ): Promise<OperationResult> {
-  return invoke("import_app_config_from_path", { sourcePath });
+  return invoke("import_app_config_from_path_safe", { sourcePath });
 }
 
 export async function exportAppConfigToPath(
