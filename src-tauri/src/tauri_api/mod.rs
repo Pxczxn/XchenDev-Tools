@@ -10,7 +10,12 @@ mod runtime_items;
 mod service_confirmation;
 mod settings;
 
-pub use commands::*;
+pub use commands::{
+    export_app_config, export_app_config_to_path, get_app_settings, get_config_paths, health_check,
+    inspect_directory_processes, inspect_port, list_default_protected_processes,
+    list_environment_candidates, list_launch_profiles, list_managed_services, project_id_for_path,
+    scan_project_directory, stop_launch_session,
+};
 pub use config_import::*;
 pub use environment_settings::*;
 pub use history::*;
