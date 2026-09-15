@@ -336,7 +336,7 @@ body {
 }
 
 /* Buttons */
-button,
+button:not([data-slot="button"]),
 .btn {
   background: var(--accent);
   color: #fff;
@@ -349,31 +349,31 @@ button,
   transition: background 0.15s, opacity 0.15s;
 }
 
-button:hover:not(:disabled) {
+button:not([data-slot="button"]):hover:not(:disabled) {
   background: var(--accent-hover);
 }
 
-button.secondary {
+button.secondary:not([data-slot="button"]) {
   background: var(--secondary-btn-bg);
   color: var(--text);
 }
 
-button.secondary:hover:not(:disabled) {
+button.secondary:not([data-slot="button"]):hover:not(:disabled) {
   background: var(--secondary-btn-hover);
 }
 
-button.btn-sm {
+button.btn-sm:not([data-slot="button"]) {
   padding: 0.35rem 0.7rem;
   font-size: 0.8rem;
 }
 
-button:disabled {
+button:not([data-slot="button"]):disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-button:focus-visible,
-input:focus-visible,
+button:not([data-slot="button"]):focus-visible,
+input:not([data-slot="input"]):focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 .nav-link:focus-visible {
@@ -382,7 +382,7 @@ textarea:focus-visible,
 }
 
 /* Forms */
-input,
+input:not([data-slot="input"]),
 select {
   background: var(--input-bg);
   border: 1px solid var(--border);
@@ -393,7 +393,7 @@ select {
   transition: border-color 0.15s;
 }
 
-input:focus,
+input:not([data-slot="input"]):focus,
 select:focus {
   border-color: var(--accent);
 }
