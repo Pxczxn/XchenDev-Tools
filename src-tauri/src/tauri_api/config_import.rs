@@ -456,7 +456,9 @@ mod tests {
     #[test]
     fn import_rejects_duplicate_slot_with_extended_unc_prefix() {
         let mut config = AppConfig::default();
-        config.projects.push(project());
+        let mut unc_project = project();
+        unc_project.root_path = r"\\server\share\demo".to_string();
+        config.projects.push(unc_project);
         config.launch_profiles.push(profile(
             "profile-a",
             r"\\server\share\demo\web",
