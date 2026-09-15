@@ -20,12 +20,8 @@ fn normalize_protocol(protocol: &str) -> Result<String, String> {
     }
 }
 
-pub fn inspect_port(protocol: &str, port: u16) -> Result<Vec<PortOccupancy>, String> {
-    if port == 0 {
-        return Err("PORT_INVALID:端口无效".to_string());
-    }
+fn protocol_query(protocol: &str) -> Result<(String, ProtocolFlags, bool, bool), String> {
     let proto = normalize_protocol(protocol)?;
-    let af = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
     let pf = match proto.as_str() {
         "tcp" => ProtocolFlags::TCP,
         "udp" => ProtocolFlags::UDP,
@@ -34,7 +30,15 @@ pub fn inspect_port(protocol: &str, port: u16) -> Result<Vec<PortOccupancy>, Str
     };
     let filter_tcp = proto == "tcp" || proto == "both" || proto == "all" || proto.is_empty();
     let filter_udp = proto == "udp" || proto == "both" || proto == "all" || proto.is_empty();
+    Ok((proto, pf, filter_tcp, filter_udp))
+}
 
+pub fn inspect_port(protocol: &str, port: u16) -> Result<Vec<PortOccupancy>, String> {
+    if port == 0 {
+        return Err("PORT_INVALID:端口无效".to_string());
+    }
+    let (_, pf, filter_tcp, filter_udp) = protocol_query(protocol)?;
+    let af = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
     let sockets = get_sockets_info(af, pf).map_err(|e| format!("PORT_QUERY_FAILED:{}", e))?;
 
     let mut result = Vec::new();
@@ -80,6 +84,30 @@ pub fn inspect_port(protocol: &str, port: u16) -> Result<Vec<PortOccupancy>, Str
         }
     }
     Ok(result)
+}
+
+pub fn pid_owns_port(protocol: &str, port: u16, pid: u32) -> Result<bool, String> {
+    if port == 0 {
+        return Err("PORT_INVALID:端口无效".to_string());
+    }
+    if pid == 0 {
+        return Ok(false);
+    }
+
+    let (_, pf, filter_tcp, filter_udp) = protocol_query(protocol)?;
+    let af = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
+    let sockets = get_sockets_info(af, pf).map_err(|e| format!("PORT_QUERY_FAILED:{}", e))?;
+
+    Ok(sockets.iter().any(|sock| {
+        let (local_port, sock_proto) = match &sock.protocol_socket_info {
+            ProtocolSocketInfo::Tcp(t) => (t.local_port, "tcp"),
+            ProtocolSocketInfo::Udp(u) => (u.local_port, "udp"),
+        };
+        local_port == port
+            && (sock_proto != "tcp" || filter_tcp)
+            && (sock_proto != "udp" || filter_udp)
+            && sock.associated_pids.contains(&pid)
+    }))
 }
 
 pub fn ports_for_pid(pid: u32) -> Vec<u16> {
@@ -128,5 +156,10 @@ mod tests {
     #[test]
     fn unknown_protocol_is_rejected() {
         assert!(normalize_protocol("http").is_err());
+    }
+
+    #[test]
+    fn zero_pid_never_owns_a_port() {
+        assert!(!pid_owns_port("tcp", 3000, 0).unwrap());
     }
 }
