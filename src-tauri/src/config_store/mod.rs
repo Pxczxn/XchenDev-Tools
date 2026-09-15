@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::domain::{AppSettings, AuditEvent, LaunchProfile, ProjectInfo, RecentError};
+use crate::settings_guard::normalize_settings;
 
 const CURRENT_CONFIG_VERSION: u32 = 1;
 
@@ -431,7 +432,8 @@ fn project_root_from_exe(exe: &Path) -> Option<PathBuf> {
 
 fn read_config(path: &Path) -> Option<AppConfig> {
     let data = fs::read_to_string(path).ok()?;
-    let config = serde_json::from_str::<AppConfig>(&data).ok()?;
+    let mut config = serde_json::from_str::<AppConfig>(&data).ok()?;
+    config.settings = normalize_settings(config.settings).ok()?;
     validate_import_config(&config).ok()?;
     Some(config)
 }
@@ -565,6 +567,45 @@ mod tests {
             store.get_manual_override("java").as_deref(),
             Some("C:\\Tools\\java.exe")
         );
+    }
+
+    #[test]
+    fn load_falls_back_to_backup_when_primary_settings_are_invalid() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+
+        let mut invalid_primary = AppConfig::default();
+        invalid_primary.settings.log_retention_days = 0;
+        write_config(&path, &invalid_primary);
+
+        let mut backup = AppConfig::default();
+        backup.manual_overrides.insert(
+            "node".to_string(),
+            "C:\\Backup\\node.exe".to_string(),
+        );
+        write_config(&backup_path(&path), &backup);
+
+        let store = open_at(path);
+        assert_eq!(
+            store.get_manual_override("node").as_deref(),
+            Some("C:\\Backup\\node.exe")
+        );
+    }
+
+    #[test]
+    fn load_normalizes_valid_settings() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+
+        let mut primary = AppConfig::default();
+        primary.settings.theme = " DARK ".to_string();
+        primary.settings.disabled_runtime_kinds = vec![" JAVA ".to_string(), "java".to_string()];
+        write_config(&path, &primary);
+
+        let store = open_at(path);
+        let settings = store.get_settings();
+        assert_eq!(settings.theme, "dark");
+        assert_eq!(settings.disabled_runtime_kinds, vec!["java"]);
     }
 
     #[test]
