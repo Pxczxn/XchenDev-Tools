@@ -5,6 +5,7 @@ pub mod config_store;
 pub mod domain;
 mod environment_detector;
 pub mod error;
+mod history_retention;
 mod port_manager;
 pub mod process_manager;
 pub mod project_scanner;
@@ -55,8 +56,8 @@ pub fn run() {
             control_windows_service_safe,
             get_app_settings,
             save_app_settings_safe,
-            list_audit_events,
-            list_recent_errors,
+            list_audit_events_safe,
+            list_recent_errors_safe,
             list_default_protected_processes,
         ])
         .run(tauri::generate_context!())
