@@ -74,6 +74,7 @@ const STATUS_LABELS: Record<string, string> = {
   DETECT_IO_ERROR: "检测 IO 错误",
   PORT_INVALID: "端口无效",
   PORT_QUERY_FAILED: "端口查询失败",
+  PORT_OWNERSHIP_CHANGED: "端口归属已变化",
   PROCESS_PROTECTED: "进程受保护",
   PROCESS_NOT_FOUND: "进程不存在",
   PROCESS_QUERY_FAILED: "进程查询失败",
