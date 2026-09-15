@@ -72,6 +72,13 @@ pub fn terminate_process_safe(
     expected_cwd: Option<String>,
 ) -> Result<OperationResult, String> {
     validate_mode(&mode)?;
+
+    // Pin the current Windows process object before consuming the confirmation token.
+    // If the original process has already exited and the PID was reused, the token's
+    // creation-time binding below rejects the replacement. If it exits after this point,
+    // keeping the handle alive prevents the PID from being reused until this operation ends.
+    let _identity_guard = process_manager::pin_process_identity(pid)?;
+
     state.consume_process_confirmation(
         &confirmation_token,
         pid,
