@@ -13,6 +13,16 @@ pub fn list_runtime_items_safe(state: State<'_, AppState>) -> Vec<RuntimeItem> {
     build_runtime_items(&state, sessions)
 }
 
+#[tauri::command]
+pub fn list_active_launch_sessions(state: State<'_, AppState>) -> Vec<LaunchSessionInfo> {
+    state
+        .command_runner
+        .list_sessions()
+        .into_iter()
+        .filter(|session| is_active_session(&session.state))
+        .collect()
+}
+
 fn build_runtime_items(state: &AppState, sessions: Vec<LaunchSessionInfo>) -> Vec<RuntimeItem> {
     let active_sessions: Vec<LaunchSessionInfo> = sessions
         .into_iter()
