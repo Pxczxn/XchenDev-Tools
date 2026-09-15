@@ -95,6 +95,7 @@ const STATUS_LABELS: Record<string, string> = {
   PROFILE_NOT_FOUND: "配置不存在",
   PROFILE_RUNNING: "启动配置仍在运行",
   CONFIG_IMPORT_BLOCKED_ACTIVE_SESSIONS: "运行中无法导入配置",
+  SETTINGS_INVALID: "设置无效",
   CONFIRMATION_ISSUE_FAILED: "确认签发失败",
   LAUNCH_CONFIRMATION_REQUIRED: "需要启动确认",
   LAUNCH_START_FAILED: "启动失败",
