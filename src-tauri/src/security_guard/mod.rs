@@ -195,6 +195,9 @@ pub fn validate_command_policy(command: &str) -> Result<(), String> {
     if command.chars().any(char::is_control) {
         return Err("COMMAND_POLICY_REJECTED:启动命令包含控制字符".to_string());
     }
+    if command.starts_with('@') {
+        return Err("COMMAND_POLICY_REJECTED:启动命令不允许 cmd 行首 @ 前缀".to_string());
+    }
     if has_unquoted_shell_control(command) {
         return Err(
             "COMMAND_POLICY_REJECTED:启动命令不允许 shell 链接、重定向、分组或转义控制符"
@@ -378,6 +381,7 @@ mod tests {
             "@taskkill /PID 123 /F",
             "@@powershell -Command Get-Process",
             "@\"C:\\Windows\\System32\\taskkill.exe\" /PID 123 /F",
+            "@ @taskkill /PID 123 /F",
         ];
         for command in rejected {
             assert!(
