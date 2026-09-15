@@ -13,6 +13,7 @@ import type {
   RuntimeItem,
   WindowsServiceInfo,
   PortOccupancy,
+  ProcessTerminationConfirmation,
   ProjectInfo,
   ProjectScanResult,
 } from "./types";
@@ -126,6 +127,20 @@ export async function inspectPort(
   return invoke("inspect_port", { protocol, port });
 }
 
+export async function issueProcessTerminationConfirmation(args: {
+  pid: number;
+  mode: string;
+  expectedName: string;
+  expectedCwd?: string;
+}): Promise<ProcessTerminationConfirmation> {
+  return invoke("issue_process_termination_confirmation_safe", {
+    pid: args.pid,
+    mode: args.mode,
+    expectedName: args.expectedName,
+    expectedCwd: args.expectedCwd ?? null,
+  });
+}
+
 export async function terminateProcess(args: {
   pid: number;
   mode: string;
@@ -133,7 +148,7 @@ export async function terminateProcess(args: {
   expectedName: string;
   expectedCwd?: string;
 }): Promise<OperationResult> {
-  return invoke("terminate_process", {
+  return invoke("terminate_process_safe", {
     pid: args.pid,
     mode: args.mode,
     confirmationToken: args.confirmationToken,
@@ -156,7 +171,7 @@ export async function terminateDirectoryProcess(args: {
   expectedName: string;
   expectedCwd?: string;
 }): Promise<OperationResult> {
-  return invoke("terminate_directory_process", {
+  return invoke("terminate_directory_process_safe", {
     pid: args.pid,
     snapshotDigest: args.snapshotDigest,
     mode: args.mode,
