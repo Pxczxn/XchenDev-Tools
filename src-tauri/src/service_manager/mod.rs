@@ -5,9 +5,12 @@ use std::process::Command;
 
 #[derive(Debug, Deserialize)]
 struct PsServiceRow {
-    Name: String,
-    DisplayName: String,
-    Status: String,
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "DisplayName")]
+    display_name: String,
+    #[serde(rename = "Status")]
+    status: String,
 }
 
 pub fn normalize_managed_service_kinds(kinds: &[String]) -> Vec<String> {
@@ -166,11 +169,11 @@ fn service_kind_enabled(kind: &ServiceKind, enabled: &HashSet<String>) -> bool {
 }
 
 fn map_row(row: PsServiceRow) -> WindowsServiceInfo {
-    let kind = classify_service(&row.Name, &row.DisplayName);
-    let status = parse_status(&row.Status);
+    let kind = classify_service(&row.name, &row.display_name);
+    let status = parse_status(&row.status);
     WindowsServiceInfo {
-        service_name: row.Name,
-        display_name: row.DisplayName,
+        service_name: row.name,
+        display_name: row.display_name,
         status,
         kind,
         can_control: true,
