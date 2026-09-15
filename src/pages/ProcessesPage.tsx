@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { PageHeader } from "../components/PageHeader";
 import {
   inspectDirectoryProcesses,
@@ -18,8 +18,15 @@ export function ProcessesPage() {
   const [rows, setRows] = useState<DirectoryProcessMatch[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const requestGenerationRef = useRef(0);
+
+  function invalidatePendingScan() {
+    requestGenerationRef.current += 1;
+    setLoading(false);
+  }
 
   function changeRootPath(path: string) {
+    invalidatePendingScan();
     setRootPath(path);
     setRows([]);
     setMessage(null);
@@ -34,18 +41,25 @@ export function ProcessesPage() {
 
   async function refreshRows(clearMessage: boolean): Promise<boolean> {
     if (!rootPath) return false;
+    const generation = requestGenerationRef.current + 1;
+    requestGenerationRef.current = generation;
+    const requestedRootPath = rootPath;
     setLoading(true);
     if (clearMessage) setMessage(null);
     try {
-      const data = await inspectDirectoryProcesses(rootPath);
+      const data = await inspectDirectoryProcesses(requestedRootPath);
+      if (generation !== requestGenerationRef.current) return false;
       setRows(data);
       return true;
     } catch (e) {
+      if (generation !== requestGenerationRef.current) return false;
       setMessage(labelErrorText(String(e)));
       setRows([]);
       return false;
     } finally {
-      setLoading(false);
+      if (generation === requestGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }
 
