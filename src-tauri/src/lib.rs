@@ -72,37 +72,26 @@ mod ipc_contract_tests {
     fn quoted_invoke_commands(source: &str) -> BTreeSet<String> {
         let mut commands = BTreeSet::new();
         let mut remaining = source;
-        for marker in ["invoke(\"", "invoke<"] {
-            // Generic invoke<T>(...) is handled below by scanning its quoted command too.
-            if marker == "invoke<" {
-                continue;
-            }
-            while let Some(start) = remaining.find(marker) {
-                let after = &remaining[start + marker.len()..];
-                if let Some(end) = after.find('"') {
-                    commands.insert(after[..end].to_string());
-                    remaining = &after[end + 1..];
-                } else {
-                    break;
-                }
-            }
-        }
 
-        // `invoke<T>("command")` calls do not match the simple marker above.
-        let mut remaining = source;
-        while let Some(invoke_pos) = remaining.find("invoke<") {
-            let after_invoke = &remaining[invoke_pos..];
-            let Some(paren_pos) = after_invoke.find("(\"") else {
+        while let Some(invoke_pos) = remaining.find("invoke") {
+            let after_invoke = &remaining[invoke_pos + "invoke".len()..];
+            let Some(paren_pos) = after_invoke.find('(') else {
                 break;
             };
-            let after_quote = &after_invoke[paren_pos + 2..];
-            if let Some(end) = after_quote.find('"') {
-                commands.insert(after_quote[..end].to_string());
-                remaining = &after_quote[end + 1..];
-            } else {
+            let args = &after_invoke[paren_pos + 1..];
+            let Some(quote_pos) = args.find('"') else {
+                remaining = args;
+                continue;
+            };
+            let after_quote = &args[quote_pos + 1..];
+            let Some(end) = after_quote.find('"') else {
                 break;
-            }
+            };
+
+            commands.insert(after_quote[..end].to_string());
+            remaining = &after_quote[end + 1..];
         }
+
         commands
     }
 
@@ -114,6 +103,7 @@ mod ipc_contract_tests {
         let Some(end) = block.find("])\n") else {
             panic!("generate_handler block end not found");
         };
+
         block[..end]
             .lines()
             .skip(1)
