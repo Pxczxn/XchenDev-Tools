@@ -1,13 +1,15 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::domain::{AppSettings, AuditEvent, LaunchProfile, ProjectInfo, RecentError};
+
+const CURRENT_CONFIG_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -29,7 +31,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: CURRENT_CONFIG_VERSION,
             settings: AppSettings::default(),
             manual_overrides: HashMap::new(),
             projects: vec![],
@@ -248,9 +250,7 @@ impl ConfigStore {
 
     pub fn import_json(&self, data: &str) -> Result<(), String> {
         let parsed: AppConfig = serde_json::from_str(data).map_err(|e| format!("PROFILE_INVALID:{}", e))?;
-        if parsed.version == 0 {
-            return Err("PROFILE_INVALID:配置版本无效".to_string());
-        }
+        validate_import_config(&parsed)?;
         let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
         *cfg = parsed;
         persist(&self.path, &cfg)?;
@@ -337,6 +337,37 @@ impl ConfigStore {
     }
 }
 
+fn validate_import_config(config: &AppConfig) -> Result<(), String> {
+    if config.version != CURRENT_CONFIG_VERSION {
+        return Err(format!(
+            "PROFILE_INVALID:不支持的配置版本 {}，当前版本 {}",
+            config.version, CURRENT_CONFIG_VERSION
+        ));
+    }
+
+    let mut project_ids = HashSet::new();
+    for project in &config.projects {
+        if project.project_id.trim().is_empty() || !project_ids.insert(project.project_id.clone()) {
+            return Err("PROFILE_INVALID:项目 ID 为空或重复".to_string());
+        }
+    }
+
+    let mut profile_ids = HashSet::new();
+    for profile in &config.launch_profiles {
+        if profile.profile_id.trim().is_empty() || !profile_ids.insert(profile.profile_id.clone()) {
+            return Err("PROFILE_INVALID:启动配置 ID 为空或重复".to_string());
+        }
+        if !project_ids.contains(&profile.project_id) {
+            return Err(format!(
+                "PROFILE_INVALID:启动配置 {} 引用了不存在的项目 {}",
+                profile.profile_id, profile.project_id
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 pub fn open_at(path: PathBuf) -> ConfigStore {
     let config = load_or_default(&path);
     ConfigStore {
@@ -418,4 +449,60 @@ pub fn project_id_from_path(root: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(root.to_lowercase().as_bytes());
     hex::encode(hasher.finalize())[..16].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::ProcessRole;
+
+    fn sample_project(id: &str) -> ProjectInfo {
+        ProjectInfo {
+            project_id: id.to_string(),
+            name: "demo".to_string(),
+            root_path: "C:\\demo".to_string(),
+            created_at: "2026-09-15T00:00:00Z".to_string(),
+            updated_at: "2026-09-15T00:00:00Z".to_string(),
+        }
+    }
+
+    fn sample_profile(id: &str, project_id: &str) -> LaunchProfile {
+        LaunchProfile {
+            profile_id: id.to_string(),
+            project_id: project_id.to_string(),
+            process_role: ProcessRole::Frontend,
+            working_directory: "C:\\demo".to_string(),
+            command: "npm run dev".to_string(),
+            source_candidate_id: None,
+            user_modified: true,
+            port_hint: None,
+        }
+    }
+
+    #[test]
+    fn import_integrity_accepts_valid_project_profile_graph() {
+        let mut config = AppConfig::default();
+        config.projects.push(sample_project("project-a"));
+        config.launch_profiles.push(sample_profile("profile-a", "project-a"));
+        assert!(validate_import_config(&config).is_ok());
+    }
+
+    #[test]
+    fn import_integrity_rejects_orphan_launch_profile() {
+        let mut config = AppConfig::default();
+        config.launch_profiles.push(sample_profile("profile-a", "missing-project"));
+        assert!(validate_import_config(&config).is_err());
+    }
+
+    #[test]
+    fn import_integrity_rejects_duplicate_ids_and_future_versions() {
+        let mut duplicate = AppConfig::default();
+        duplicate.projects.push(sample_project("same"));
+        duplicate.projects.push(sample_project("same"));
+        assert!(validate_import_config(&duplicate).is_err());
+
+        let mut future = AppConfig::default();
+        future.version = CURRENT_CONFIG_VERSION + 1;
+        assert!(validate_import_config(&future).is_err());
+    }
 }
