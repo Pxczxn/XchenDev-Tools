@@ -6,6 +6,7 @@ mod process_confirmation;
 mod projects;
 mod runtime_items;
 mod service_confirmation;
+mod settings;
 
 pub use commands::*;
 pub use config_import::*;
@@ -15,3 +16,4 @@ pub use process_confirmation::*;
 pub use projects::*;
 pub use runtime_items::*;
 pub use service_confirmation::*;
+pub use settings::*;
