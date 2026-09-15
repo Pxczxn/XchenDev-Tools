@@ -14,14 +14,17 @@ pub fn list_runtime_items_safe(state: State<'_, AppState>) -> Vec<RuntimeItem> {
 }
 
 fn build_runtime_items(state: &AppState, sessions: Vec<LaunchSessionInfo>) -> Vec<RuntimeItem> {
-    let active_profiles: HashSet<String> = sessions
-        .iter()
+    let active_sessions: Vec<LaunchSessionInfo> = sessions
+        .into_iter()
         .filter(|session| is_active_session(&session.state))
+        .collect();
+    let active_profiles: HashSet<String> = active_sessions
+        .iter()
         .map(|session| session.profile_id.clone())
         .collect();
 
     let mut items = Vec::new();
-    for session in sessions {
+    for session in active_sessions {
         let profile = state.config.get_profile(&session.profile_id);
         let name = profile
             .map(|profile| format!("{} ({})", profile.command, role_label(&profile.process_role)))
@@ -94,13 +97,7 @@ fn map_session_state(session: &LaunchSessionInfo) -> RuntimeItemState {
         LaunchSessionState::Starting => RuntimeItemState::Starting,
         LaunchSessionState::Running => RuntimeItemState::Running,
         LaunchSessionState::Stopping => RuntimeItemState::Stopping,
-        LaunchSessionState::Stopped => {
-            if session.exit_code.unwrap_or(0) != 0 {
-                RuntimeItemState::Failed
-            } else {
-                RuntimeItemState::Stopped
-            }
-        }
+        LaunchSessionState::Stopped => RuntimeItemState::Stopped,
         LaunchSessionState::Failed => RuntimeItemState::Failed,
     }
 }
@@ -110,7 +107,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_sessions_do_not_mark_profile_active() {
+    fn only_live_states_are_active() {
+        assert!(is_active_session(&LaunchSessionState::Starting));
         assert!(is_active_session(&LaunchSessionState::Running));
         assert!(is_active_session(&LaunchSessionState::Stopping));
         assert!(!is_active_session(&LaunchSessionState::Stopped));
