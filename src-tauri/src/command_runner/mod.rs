@@ -569,6 +569,10 @@ fn wait_for_child(
     profile_id: String,
 ) {
     let exit_code = finalize_process_exit(&runner, &session_id, &profile_id);
+    let final_state = runner
+        .get(&session_id)
+        .map(|session| session.state)
+        .unwrap_or(LaunchSessionState::Stopped);
 
     let _ = app.emit(
         "launch_output",
@@ -578,7 +582,7 @@ fn wait_for_child(
             "chunk": "",
             "final": true,
             "exitCode": exit_code,
-            "finalState": "STOPPED"
+            "finalState": final_state
         }),
     );
 }
