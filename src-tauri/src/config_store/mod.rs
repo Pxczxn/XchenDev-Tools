@@ -1,3 +1,6 @@
+mod atomic;
+
+use atomic::{atomic_write_with_backup, backup_path};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
@@ -426,22 +429,25 @@ fn project_root_from_exe(exe: &Path) -> Option<PathBuf> {
     None
 }
 
+fn read_config(path: &Path) -> Option<AppConfig> {
+    let data = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<AppConfig>(&data).ok()
+}
+
 fn load_or_default(path: &PathBuf) -> AppConfig {
-    if let Ok(data) = fs::read_to_string(path) {
-        if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
-            return cfg;
-        }
+    if let Some(config) = read_config(path) {
+        return config;
+    }
+    if let Some(config) = read_config(&backup_path(path)) {
+        return config;
     }
     AppConfig::default()
 }
 
 fn persist(path: &PathBuf, config: &AppConfig) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let data = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    fs::write(path, data).map_err(|e| e.to_string())?;
-    Ok(())
+    let data = serde_json::to_vec_pretty(config).map_err(|e| e.to_string())?;
+    let backup_current = read_config(path).is_some();
+    atomic_write_with_backup(path, &data, backup_current)
 }
 
 pub fn project_id_from_path(root: &str) -> String {
@@ -455,6 +461,7 @@ pub fn project_id_from_path(root: &str) -> String {
 mod tests {
     use super::*;
     use crate::domain::ProcessRole;
+    use tempfile::tempdir;
 
     fn sample_project(id: &str) -> ProjectInfo {
         ProjectInfo {
@@ -504,5 +511,28 @@ mod tests {
         let mut future = AppConfig::default();
         future.version = CURRENT_CONFIG_VERSION + 1;
         assert!(validate_import_config(&future).is_err());
+    }
+
+    #[test]
+    fn load_falls_back_to_last_good_backup_when_primary_is_corrupt() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+        let mut backup = AppConfig::default();
+        backup.manual_overrides.insert(
+            "node".to_string(),
+            "C:\\Tools\\node.exe".to_string(),
+        );
+        fs::write(&path, "{broken-json").expect("corrupt primary");
+        fs::write(
+            backup_path(&path),
+            serde_json::to_vec_pretty(&backup).expect("serialize backup"),
+        )
+        .expect("backup");
+
+        let store = open_at(path);
+        assert_eq!(
+            store.get_manual_override("node").as_deref(),
+            Some("C:\\Tools\\node.exe")
+        );
     }
 }
