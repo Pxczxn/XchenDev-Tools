@@ -47,7 +47,7 @@ pub fn run() {
             import_app_config_safe,
             import_app_config_from_path_safe,
             export_app_config_to_path,
-            list_launch_sessions,
+            list_active_launch_sessions,
             list_managed_services,
             control_windows_service,
             get_app_settings,
