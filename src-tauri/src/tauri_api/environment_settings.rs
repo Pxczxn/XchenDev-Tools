@@ -19,6 +19,12 @@ fn normalize_runtime_kind(runtime_kind: &str) -> Result<String, String> {
     }
 }
 
+fn runtime_is_disabled(runtime_kind: &str, disabled: &[String]) -> bool {
+    disabled
+        .iter()
+        .any(|kind| kind.trim().eq_ignore_ascii_case(runtime_kind))
+}
+
 #[tauri::command]
 pub fn save_manual_override_safe(
     state: State<'_, AppState>,
@@ -26,6 +32,14 @@ pub fn save_manual_override_safe(
     executable_path: String,
 ) -> Result<EnvironmentCandidate, String> {
     let runtime_kind = normalize_runtime_kind(&runtime_kind)?;
+    let settings = state.config.get_settings();
+    if runtime_is_disabled(&runtime_kind, &settings.disabled_runtime_kinds) {
+        return Err(format!(
+            "RUNTIME_DISABLED:运行时 {} 已在设置中禁用",
+            runtime_kind
+        ));
+    }
+
     let executable_path = executable_path.trim().to_string();
     let candidate = with_config_rollback(&state, || {
         environment_detector::validate_and_save_override(
@@ -52,5 +66,13 @@ mod tests {
     fn unknown_runtime_kind_is_rejected() {
         let err = normalize_runtime_kind("go").expect_err("unknown runtime must fail");
         assert!(err.contains("RUNTIME_KIND_INVALID"));
+    }
+
+    #[test]
+    fn disabled_runtime_matching_is_trimmed_and_case_insensitive() {
+        let disabled = vec![" JAVA ".to_string(), "node".to_string()];
+        assert!(runtime_is_disabled("java", &disabled));
+        assert!(runtime_is_disabled("NODE", &disabled));
+        assert!(!runtime_is_disabled("rust", &disabled));
     }
 }
