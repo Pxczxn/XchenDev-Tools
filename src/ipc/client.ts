@@ -168,6 +168,28 @@ export async function terminateProcess(args: {
   });
 }
 
+export async function terminatePortProcess(args: {
+  pid: number;
+  protocol: string;
+  port: number;
+  snapshotDigest: string;
+  mode: string;
+  confirmationToken: string;
+  expectedName: string;
+  expectedCwd?: string;
+}): Promise<OperationResult> {
+  return invoke("terminate_port_process_safe", {
+    pid: args.pid,
+    protocol: args.protocol,
+    port: args.port,
+    snapshotDigest: args.snapshotDigest,
+    mode: args.mode,
+    confirmationToken: args.confirmationToken,
+    expectedName: args.expectedName,
+    expectedCwd: args.expectedCwd ?? null,
+  });
+}
+
 export async function inspectDirectoryProcesses(
   rootPath: string,
 ): Promise<DirectoryProcessMatch[]> {
