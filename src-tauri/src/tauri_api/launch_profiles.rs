@@ -53,7 +53,7 @@ fn candidate_ids_match(left: Option<&str>, right: Option<&str>) -> bool {
     }
 }
 
-fn validated_workdir_for_project(
+pub(crate) fn validated_workdir_for_project(
     state: &AppState,
     project_id: &str,
     working_directory: &str,
@@ -191,7 +191,8 @@ pub fn start_launch_profile_safe(
         .ok_or_else(|| "PROFILE_NOT_FOUND:配置不存在".to_string())?;
 
     // Imported or manually edited config is untrusted at the execution boundary.
-    security_guard::validate_command_policy(profile.command.trim())?;
+    let command = profile.command.trim();
+    security_guard::validate_command_policy(command)?;
     let canonical_workdir = validated_workdir_for_project(
         &state,
         &profile.project_id,
@@ -205,15 +206,15 @@ pub fn start_launch_profile_safe(
     state.consume_confirmation(
         &confirmation_token,
         &profile.profile_id,
-        &profile.command,
-        &profile.working_directory,
+        command,
+        &canonical_workdir,
         role,
     )?;
     state.command_runner.start(
         &app,
         &profile.profile_id,
         &canonical_workdir,
-        profile.command.trim(),
+        command,
     )
 }
 
