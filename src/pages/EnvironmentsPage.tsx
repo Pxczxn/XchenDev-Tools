@@ -98,7 +98,10 @@ export function EnvironmentsPage() {
     }
   }, [enabledKinds, manualKind]);
 
+  const manualDisabled = enabledKinds.length === 0;
+
   async function onSaveManual() {
+    if (manualDisabled || !manualPath.trim()) return;
     try {
       await saveManualOverride(manualKind, manualPath);
       await load(true);
@@ -147,7 +150,11 @@ export function EnvironmentsPage() {
 
       {sortedGroups.length === 0 && !loading && (
         <div className="card">
-          <div className="empty">无候选，请手动指定路径。</div>
+          <div className="empty">
+            {manualDisabled
+              ? "未启用任何运行时类型，请先在「设置」中勾选。"
+              : "无候选，请手动指定路径。"}
+          </div>
         </div>
       )}
 
@@ -171,12 +178,15 @@ export function EnvironmentsPage() {
         </div>
         <div className="card-body">
         <p className="muted env-hint">
-          当自动检测不准确时，可指定可执行文件路径并保存为优先候选。
+          {manualDisabled
+            ? "未启用任何运行时类型，手动覆盖暂不可用。"
+            : "当自动检测不准确时，可指定可执行文件路径并保存为优先候选。"}
         </p>
         <div className="form-row env-manual-form">
           <select
             value={manualKind}
             onChange={(e) => setManualKind(e.target.value)}
+            disabled={manualDisabled}
           >
             {enabledKinds.map((id) => (
               <option key={id} value={id}>{formatRuntimeKind(id)}</option>
@@ -187,8 +197,15 @@ export function EnvironmentsPage() {
             placeholder="C:\path\to\executable.exe"
             value={manualPath}
             onChange={(e) => setManualPath(e.target.value)}
+            disabled={manualDisabled}
           />
-          <button type="button" onClick={onSaveManual}>保存并验证</button>
+          <button
+            type="button"
+            onClick={onSaveManual}
+            disabled={manualDisabled || loading || !manualPath.trim()}
+          >
+            保存并验证
+          </button>
         </div>
         </div>
       </div>
