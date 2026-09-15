@@ -122,10 +122,6 @@ export function ProjectsPage() {
       setSessionsById((prev) => {
         const current = prev[p.launchSessionId];
         if (!current) return prev;
-        setLastSessionByProfile((last) => ({
-          ...last,
-          [current.profile_id]: current.launch_session_id,
-        }));
         return {
           ...prev,
           [p.launchSessionId]: {
