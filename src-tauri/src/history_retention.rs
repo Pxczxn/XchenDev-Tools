@@ -7,7 +7,7 @@ pub const MAX_RECENT_ERRORS: usize = 50;
 
 fn timestamp_is_retained(timestamp: &str, cutoff: &DateTime<Utc>) -> bool {
     DateTime::parse_from_rfc3339(timestamp)
-        .map(|value| value.with_timezone(&Utc) >= cutoff.clone())
+        .map(|value| value.with_timezone(&Utc) >= *cutoff)
         // Imported legacy records with malformed timestamps are kept rather than deleted blindly.
         .unwrap_or(true)
 }
