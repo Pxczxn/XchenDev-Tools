@@ -23,6 +23,9 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Fix JSONC patch helper
+        run: python .github/scripts/fix_shadcn_jsonc_patch.py
+
       - name: Apply shadcn migration
         run: python .github/scripts/shadcn_projects_patch.py
 
