@@ -1,4 +1,4 @@
-name: One-shot Project UI Polish
+name: One-shot Projects shadcn Migration
 
 on:
   push:
@@ -10,9 +10,9 @@ permissions:
   contents: write
 
 jobs:
-  polish:
+  migrate:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -23,11 +23,14 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Apply project UI polish
-        run: python .github/scripts/project_ui_patch.py
+      - name: Apply shadcn migration
+        run: python .github/scripts/shadcn_projects_patch.py
 
-      - name: Install frontend dependencies
-        run: npm ci
+      - name: Install shadcn runtime dependencies
+        run: npm install class-variance-authority clsx tailwind-merge lucide-react
+
+      - name: Install Tailwind Vite dependencies
+        run: npm install -D tailwindcss @tailwindcss/vite @types/node
 
       - name: Frontend tests
         run: npm test
@@ -35,15 +38,15 @@ jobs:
       - name: Frontend build
         run: npm run build
 
-      - name: Commit polish
+      - name: Commit migration
         shell: pwsh
         run: |
           git config user.name "XchenDev"
           git config user.email "Pxczxn@163.com"
-          git add src/pages/ProjectsPage.tsx src/styles/app.css
+          git add package.json package-lock.json components.json tsconfig.json vite.config.ts src/layout/AppLayout.tsx src/styles/app.css src/styles/shadcn.css src/lib/utils.ts src/pages/ProjectsPage.tsx src/components/ui/button.tsx src/components/ui/card.tsx src/components/ui/badge.tsx src/components/ui/input.tsx
           git diff --cached --quiet
           if ($LASTEXITCODE -ne 0) {
-            git commit -m "【ui】优化项目管理控制台布局与视觉层级"
+            git commit -m "【ui】项目管理迁移 shadcn 并重构布局"
             git push
           } else {
             Write-Host "No changes"
