@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "../components/PageHeader";
 import {
   getAppSettings,
@@ -63,6 +63,7 @@ export function EnvironmentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [manualKind, setManualKind] = useState("node");
   const [manualPath, setManualPath] = useState("");
+  const [manualSaving, setManualSaving] = useState(false);
   const [enabledKinds, setEnabledKinds] = useState<string[]>([
     "java",
     "python",
@@ -70,26 +71,40 @@ export function EnvironmentsPage() {
     "php",
     "rust",
   ]);
+  const requestGenerationRef = useRef(0);
 
   const load = useCallback(async (forceRefresh = false) => {
+    const generation = requestGenerationRef.current + 1;
+    requestGenerationRef.current = generation;
     setLoading(true);
     setError(null);
     try {
       const settings = await getAppSettings();
-      setEnabledKinds(
-        enabledRuntimeKindIds(settings.disabled_runtime_kinds ?? []),
+      if (generation !== requestGenerationRef.current) return false;
+      const nextEnabledKinds = enabledRuntimeKindIds(
+        settings.disabled_runtime_kinds ?? [],
       );
       const data = await listEnvironmentCandidates([], forceRefresh);
+      if (generation !== requestGenerationRef.current) return false;
+      setEnabledKinds(nextEnabledKinds);
       setCandidates(visibleEnvironmentCandidates(data));
+      return true;
     } catch (e) {
+      if (generation !== requestGenerationRef.current) return false;
       setError(labelErrorText(String(e)));
+      return false;
     } finally {
-      setLoading(false);
+      if (generation === requestGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     void load(false);
+    return () => {
+      requestGenerationRef.current += 1;
+    };
   }, [load]);
 
   useEffect(() => {
@@ -101,12 +116,18 @@ export function EnvironmentsPage() {
   const manualDisabled = enabledKinds.length === 0;
 
   async function onSaveManual() {
-    if (manualDisabled || !manualPath.trim()) return;
+    if (manualDisabled || manualSaving || !manualPath.trim()) return;
+    const requestedKind = manualKind;
+    const requestedPath = manualPath.trim();
+    setManualSaving(true);
+    setError(null);
     try {
-      await saveManualOverride(manualKind, manualPath);
+      await saveManualOverride(requestedKind, requestedPath);
       await load(true);
     } catch (e) {
       setError(labelErrorText(String(e)));
+    } finally {
+      setManualSaving(false);
     }
   }
 
@@ -135,7 +156,7 @@ export function EnvironmentsPage() {
         title="环境管理"
         description="检测本机运行时路径与版本；可在「设置」中勾选要显示的环境类型"
         actions={
-          <button type="button" className="btn-sm" onClick={() => void load(true)} disabled={loading}>
+          <button type="button" className="btn-sm" onClick={() => void load(true)} disabled={loading || manualSaving}>
             {loading ? "扫描中…" : "重新检测"}
           </button>
         }
@@ -186,7 +207,7 @@ export function EnvironmentsPage() {
           <select
             value={manualKind}
             onChange={(e) => setManualKind(e.target.value)}
-            disabled={manualDisabled}
+            disabled={manualDisabled || manualSaving}
           >
             {enabledKinds.map((id) => (
               <option key={id} value={id}>{formatRuntimeKind(id)}</option>
@@ -197,14 +218,14 @@ export function EnvironmentsPage() {
             placeholder="C:\path\to\executable.exe"
             value={manualPath}
             onChange={(e) => setManualPath(e.target.value)}
-            disabled={manualDisabled}
+            disabled={manualDisabled || manualSaving}
           />
           <button
             type="button"
             onClick={onSaveManual}
-            disabled={manualDisabled || loading || !manualPath.trim()}
+            disabled={manualDisabled || manualSaving || loading || !manualPath.trim()}
           >
-            保存并验证
+            {manualSaving ? "保存中…" : "保存并验证"}
           </button>
         </div>
         </div>
