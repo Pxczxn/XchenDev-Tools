@@ -242,6 +242,19 @@ fn run_sc(args: &[&str]) -> Result<(), String> {
     Err(format!("SERVICE_CONTROL_FAILED:{}", msg.trim()))
 }
 
+pub fn service_status_to_runtime_state(
+    status: &WindowsServiceStatus,
+) -> crate::domain::RuntimeItemState {
+    use crate::domain::RuntimeItemState;
+    match status {
+        WindowsServiceStatus::Running => RuntimeItemState::Running,
+        WindowsServiceStatus::Stopped => RuntimeItemState::Stopped,
+        WindowsServiceStatus::Starting => RuntimeItemState::Starting,
+        WindowsServiceStatus::Stopping => RuntimeItemState::Stopping,
+        WindowsServiceStatus::Paused | WindowsServiceStatus::Unknown => RuntimeItemState::Unknown,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,18 +278,5 @@ mod tests {
     #[test]
     fn empty_kinds_skips_discovery() {
         assert_eq!(discovery_pattern(&[]), None);
-    }
-}
-
-pub fn service_status_to_runtime_state(
-    status: &WindowsServiceStatus,
-) -> crate::domain::RuntimeItemState {
-    use crate::domain::RuntimeItemState;
-    match status {
-        WindowsServiceStatus::Running => RuntimeItemState::Running,
-        WindowsServiceStatus::Stopped => RuntimeItemState::Stopped,
-        WindowsServiceStatus::Starting => RuntimeItemState::Starting,
-        WindowsServiceStatus::Stopping => RuntimeItemState::Stopping,
-        WindowsServiceStatus::Paused | WindowsServiceStatus::Unknown => RuntimeItemState::Unknown,
     }
 }
