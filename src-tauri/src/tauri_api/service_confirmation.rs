@@ -97,11 +97,7 @@ fn query_service_status(service_name: &str) -> Result<WindowsServiceStatus, Stri
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = if !stderr.trim().is_empty() {
-            stderr
-        } else {
-            stdout
-        };
+        let detail = if !stderr.trim().is_empty() { stderr } else { stdout };
         return Err(format!("SERVICE_QUERY_FAILED:{}", detail.trim()));
     }
 
@@ -184,7 +180,7 @@ pub fn issue_service_control_confirmation_safe(
         let age = Utc::now()
             .signed_duration_since(item.created_at)
             .num_seconds();
-        age >= 0 && age <= SERVICE_CONFIRMATION_TTL_SECS
+        (0..=SERVICE_CONFIRMATION_TTL_SECS).contains(&age)
     });
     make_room_for_service_confirmation(&mut store);
     store.insert(token.clone(), pending);
@@ -207,8 +203,6 @@ pub fn control_windows_service_safe(
     let service_name = service_name.trim().to_string();
     let action = normalize_action(&action)?;
 
-    // Serialize service mutations so two confirmations issued from the same starting state
-    // cannot both pass validation and then race stop/start/restart against each other.
     let _control_guard = service_control_lock()
         .lock()
         .map_err(|_| "SERVICE_CONTROL_LOCK_FAILED:服务控制锁失败".to_string())?;
@@ -223,7 +217,7 @@ pub fn control_windows_service_safe(
         let age = Utc::now()
             .signed_duration_since(pending.created_at)
             .num_seconds();
-        if age < 0 || age > SERVICE_CONFIRMATION_TTL_SECS {
+        if !(0..=SERVICE_CONFIRMATION_TTL_SECS).contains(&age) {
             return Err("SERVICE_CONFIRMATION_REQUIRED:确认令牌无效或已过期".to_string());
         }
         pending
