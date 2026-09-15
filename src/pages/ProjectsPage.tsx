@@ -1,7 +1,30 @@
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
+import {
+  Activity,
+  Boxes,
+  FolderKanban,
+  FolderOpen,
+  Play,
+  RefreshCw,
+  ScanSearch,
+  Settings2,
+  Square,
+  Terminal,
+  Trash2,
+} from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card";
+import { Input } from "../components/ui/input";
 import {
   issueLaunchConfirmation,
   listLaunchProfiles,
@@ -98,11 +121,13 @@ function terminalState(
 }
 
 function sessionBadgeClass(session: LaunchSessionInfo): string {
-  if (ACTIVE_SESSION_STATES.has(session.state)) return "env-badge ok";
-  if (session.state === "FAILED" || (session.exit_code ?? 0) !== 0) {
-    return "env-badge err";
+  if (ACTIVE_SESSION_STATES.has(session.state)) {
+    return "border-emerald-500/25 bg-emerald-500/10 text-emerald-500";
   }
-  return "env-badge muted";
+  if (session.state === "FAILED" || (session.exit_code ?? 0) !== 0) {
+    return "border-destructive/25 bg-destructive/10 text-destructive";
+  }
+  return "border-border bg-muted text-muted-foreground";
 }
 
 export function ProjectsPage() {
@@ -573,270 +598,414 @@ export function ProjectsPage() {
     <>
       <PageHeader
         title="项目管理"
-        description="保存项目、扫描技术栈、配置并统一启停前后端会话"
+        description="项目发现、启动配置与本地运行控制"
       />
 
-      {projects.length > 0 && (
-        <div className="card">
-          <div className="card-header">
-            <h3>我的项目</h3>
-            <span className="card-meta">{projects.length} 个</span>
-          </div>
-          <div className="card-body project-grid">
-            {projects.map((project) => (
-              <div
-                key={project.project_id}
-                className={`env-candidate project-card ${
-                  projectId === project.project_id ? "active" : ""
-                }`}
-              >
-                <div className="env-candidate-head">
-                  <span className="project-name">{project.name}</span>
-                  {projectId === project.project_id && (
-                    <span className="env-badge ok">当前项目</span>
-                  )}
-                </div>
-                <div className="env-path" title={project.root_path}>
-                  {formatDisplayPath(project.root_path)}
-                </div>
-                <div className="list-card-actions">
-                  <button type="button" onClick={() => void openProject(project)}>
-                    打开
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => void onRemoveProject(project)}
-                  >
-                    移除记录
-                  </button>
-                </div>
+      <div className="space-y-4 pb-2">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <FolderKanban className="size-4" />
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="card toolbar-card env-toolbar project-toolbar">
-        <div className="project-toolbar-label">项目路径</div>
-        <input
-          className="env-path-input"
-          value={rootPath}
-          onChange={(e) => {
-            invalidateProjectContext();
-            setRootPath(e.target.value);
-            setProjectId("");
-            setProfiles([]);
-            setCandidates([]);
-            setSelected(null);
-          }}
-          placeholder="项目根目录"
-        />
-        <button type="button" className="secondary" onClick={pickDir}>
-          选择项目目录
-        </button>
-        <button type="button" onClick={onScan} disabled={loading || !rootPath}>
-          {loading ? "扫描中…" : projectId ? "重新扫描" : "扫描并添加"}
-        </button>
-      </div>
-
-      {message && <div className="feedback-banner">{message}</div>}
-
-      {candidates.length === 0 && !loading && rootPath && (
-        <div className="card">
-          <div className="empty">扫描项目以识别技术栈和启动配置。</div>
-        </div>
-      )}
-
-      {candidates.length > 0 && (
-        <div className="project-stack-grid">
-          {candidates.map((c) => (
-            <div key={c.id} className="env-candidate project-stack-card">
-              <div className="env-candidate-head">
-                <span className="env-tag">{labelStatus(c.stack)}</span>
-                <span
-                  className={
-                    c.status === "CONFLICT" ? "env-badge err" : "env-badge ok"
-                  }
-                >
-                  {labelStatus(c.status)}
-                </span>
-              </div>
-              <div className="env-path" title={c.directory}>
-                {formatDisplayPath(c.directory)}
-              </div>
-              <div className="env-meta">
-                <span className="env-meta-label">证据</span>
-                <span className="env-version">{c.evidence_file}</span>
-              </div>
-              {c.suggested_command && (
-                <div className="env-meta">
-                  <span className="env-meta-label">建议</span>
-                  <span className="env-version">{c.suggested_command}</span>
-                </div>
-              )}
-              <div className="list-card-actions">
-                <button type="button" onClick={() => selectCandidate(c)}>
-                  配置启动
-                </button>
+              <div className="min-w-0">
+                <CardTitle>我的项目</CardTitle>
+                <CardDescription>打开已有项目，或从本机目录添加新的项目。</CardDescription>
               </div>
             </div>
-          ))}
-        </div>
-      )}
+            <Badge variant="secondary">{projects.length} 个</Badge>
+          </CardHeader>
+          <CardContent>
+            {projects.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border px-5 py-8 text-center text-sm text-muted-foreground">
+                还没有项目。选择一个本机目录并扫描后，会自动加入项目库。
+              </div>
+            ) : (
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {projects.map((project) => {
+                  const isCurrent = projectId === project.project_id;
+                  return (
+                    <Card
+                      key={project.project_id}
+                      className={
+                        isCurrent
+                          ? "gap-3 border-primary/60 bg-primary/[0.04] shadow-md ring-1 ring-primary/15"
+                          : "gap-3 bg-background/40 shadow-none transition-colors hover:border-primary/35"
+                      }
+                    >
+                      <CardHeader className="gap-2 px-4 pt-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <CardTitle className="min-w-0 truncate text-sm">
+                            {project.name}
+                          </CardTitle>
+                          {isCurrent && (
+                            <Badge className="shrink-0">当前</Badge>
+                          )}
+                        </div>
+                        <CardDescription
+                          className="truncate font-mono text-xs"
+                          title={project.root_path}
+                        >
+                          {formatDisplayPath(project.root_path)}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="mt-auto flex gap-2 px-4 pb-4">
+                        <Button
+                          size="sm"
+                          className="flex-1"
+                          onClick={() => void openProject(project)}
+                        >
+                          <FolderOpen />
+                          打开
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-muted-foreground hover:text-destructive"
+                          onClick={() => void onRemoveProject(project)}
+                          aria-label={`移除项目 ${project.name}`}
+                        >
+                          <Trash2 />
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-      {selected && (
-        <div className="card project-config-card">
-          <div className="card-header">
-            <h3>启动配置</h3>
-          </div>
-          <div className="card-body">
-            <div className="form-row">
-              <select value={role} onChange={(e) => setRole(e.target.value)}>
-                <option value="frontend">前端</option>
-                <option value="backend">后端</option>
-              </select>
-              <input
-                className="input-grow"
-                value={workdir}
-                onChange={(e) => setWorkdir(e.target.value)}
-                placeholder="工作目录"
-              />
+        <Card>
+          <CardContent className="pt-5">
+            <div className="grid items-center gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
+              <div className="relative min-w-0">
+                <FolderOpen className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="pl-9 font-mono text-xs"
+                  value={rootPath}
+                  onChange={(e) => {
+                    invalidateProjectContext();
+                    setRootPath(e.target.value);
+                    setProjectId("");
+                    setProfiles([]);
+                    setCandidates([]);
+                    setSelected(null);
+                  }}
+                  placeholder="选择或输入项目根目录"
+                />
+              </div>
+              <Button variant="outline" onClick={pickDir}>
+                <FolderOpen />
+                选择目录
+              </Button>
+              <Button onClick={onScan} disabled={loading || !rootPath}>
+                {loading ? <RefreshCw className="animate-spin" /> : <ScanSearch />}
+                {loading ? "扫描中…" : projectId ? "重新扫描" : "扫描并添加"}
+              </Button>
             </div>
-            <div className="form-row">
-              <input
-                className="input-grow"
-                value={command}
-                onChange={(e) => setCommand(e.target.value)}
-                placeholder="启动命令"
-              />
-              <button type="button" onClick={onSaveProfile}>
-                保存启动配置
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </CardContent>
+        </Card>
 
-      {profiles.length > 0 && (
-        <div className="card project-runtime-card">
-          <div className="card-header">
-            <h3>已保存配置</h3>
-            <div className="project-runtime-actions">
-              <span
-                className={
-                  runtimeSnapshot.activeSessions.length > 0
-                    ? "env-badge ok"
-                    : "env-badge muted"
-                }
-              >
-                运行 {runtimeSnapshot.activeSessions.length}/{profiles.length}
-              </span>
-              <button
-                type="button"
-                className="btn-sm"
-                onClick={() => void onStartAll()}
-                disabled={
-                  bulkAction !== null || runtimeSnapshot.startableProfiles.length === 0
-                }
-              >
-                {bulkAction === "start"
-                  ? "启动中…"
-                  : `全部启动 (${runtimeSnapshot.startableProfiles.length})`}
-              </button>
-              <button
-                type="button"
-                className="secondary btn-sm"
-                onClick={() => void onStopAll()}
-                disabled={
-                  bulkAction !== null || runtimeSnapshot.stoppableSessions.length === 0
-                }
-              >
-                {bulkAction === "stop"
-                  ? "停止中…"
-                  : `全部停止 (${runtimeSnapshot.stoppableSessions.length})`}
-              </button>
-            </div>
+        {message && (
+          <div className="rounded-lg border border-border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
+            {message}
           </div>
-          <div className="card-body project-profile-list">
-            {profiles.map((profile) => {
-              const activeSession = activeSessionForProfile(
-                sessionsById,
-                profile.profile_id,
-              );
-              const lastSessionId = lastSessionByProfile[profile.profile_id];
-              const displaySession =
-                activeSession ?? (lastSessionId ? sessionsById[lastSessionId] : undefined);
-              const sessionLogs = displaySession
-                ? logsBySessionId[displaySession.launch_session_id] ?? []
-                : [];
+        )}
 
-              return (
-                <div key={profile.profile_id} className="env-candidate project-profile-card">
-                  <div className="env-candidate-head">
-                    <span className="env-badge muted">
-                      {labelStatus(profile.process_role)}
-                    </span>
-                    {displaySession && (
-                      <span className={sessionBadgeClass(displaySession)}>
-                        {labelStatus(displaySession.state)} · PID {displaySession.pid ?? "—"}
-                        {displaySession.exit_code !== undefined &&
-                        displaySession.exit_code !== null
-                          ? ` · 退出码 ${displaySession.exit_code}`
-                          : ""}
-                      </span>
-                    )}
-                  </div>
-                  <div className="env-path">{profile.command}</div>
-                  <div className="env-meta">
-                    <span className="env-meta-label">目录</span>
-                    <span className="env-version">
-                      {formatDisplayPath(profile.working_directory)}
-                    </span>
-                  </div>
-                  <div className="list-card-actions">
-                    {activeSession ? (
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => onStop(activeSession)}
-                        disabled={
-                          bulkAction !== null || activeSession.state === "STOPPING"
-                        }
+        {candidates.length === 0 && !loading && rootPath && (
+          <Card>
+            <CardContent className="py-8 text-center text-sm text-muted-foreground">
+              扫描项目后，这里会显示识别到的技术栈和建议启动命令。
+            </CardContent>
+          </Card>
+        )}
+
+        {candidates.length > 0 && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-secondary text-secondary-foreground">
+                  <Boxes className="size-4" />
+                </div>
+                <div>
+                  <CardTitle>技术栈扫描</CardTitle>
+                  <CardDescription>
+                    选择识别结果生成启动配置；扫描结果不会自动执行命令。
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {candidates.map((candidate) => (
+                  <Card key={candidate.id} className="gap-3 bg-background/40 shadow-none">
+                    <CardHeader className="gap-2 px-4 pt-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <Badge variant="secondary">
+                          {labelStatus(candidate.stack)}
+                        </Badge>
+                        <Badge
+                          variant="outline"
+                          className={
+                            candidate.status === "CONFLICT"
+                              ? "border-destructive/25 bg-destructive/10 text-destructive"
+                              : "border-emerald-500/25 bg-emerald-500/10 text-emerald-500"
+                          }
+                        >
+                          {labelStatus(candidate.status)}
+                        </Badge>
+                      </div>
+                      <CardDescription
+                        className="truncate font-mono text-xs"
+                        title={candidate.directory}
                       >
-                        {activeSession.state === "STOPPING" ? "停止中…" : "停止"}
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => onStart(profile)}
-                          disabled={bulkAction !== null}
-                        >
-                          启动
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary"
-                          onClick={() => void onRemoveProfile(profile)}
-                          disabled={bulkAction !== null}
-                        >
-                          移除配置
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  {displaySession && (
-                    <div className="log-panel project-log-panel">
-                      {sessionLogs.join("\n") || "暂无输出"}
-                    </div>
-                  )}
+                        {formatDisplayPath(candidate.directory)}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="mt-auto space-y-3 px-4 pb-4">
+                      <div className="space-y-1 text-xs text-muted-foreground">
+                        <div className="truncate" title={candidate.evidence_file}>
+                          证据：{candidate.evidence_file}
+                        </div>
+                        {candidate.suggested_command && (
+                          <div className="rounded-md border border-border bg-muted/40 px-2.5 py-2 font-mono text-foreground">
+                            {candidate.suggested_command}
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant={selected?.id === candidate.id ? "secondary" : "outline"}
+                        className="w-full"
+                        onClick={() => selectCandidate(candidate)}
+                      >
+                        <Settings2 />
+                        {selected?.id === candidate.id ? "正在配置" : "配置启动"}
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {selected && (
+          <Card className="border-primary/30">
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Settings2 className="size-4" />
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+                <div>
+                  <CardTitle>启动配置</CardTitle>
+                  <CardDescription>
+                    调整进程角色、工作目录和启动命令后保存。
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid gap-3 md:grid-cols-[140px_minmax(0,1fr)]">
+                <select
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/40"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                >
+                  <option value="frontend">前端</option>
+                  <option value="backend">后端</option>
+                </select>
+                <Input
+                  className="font-mono text-xs"
+                  value={workdir}
+                  onChange={(e) => setWorkdir(e.target.value)}
+                  placeholder="工作目录"
+                />
+              </div>
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                <Input
+                  className="font-mono text-xs"
+                  value={command}
+                  onChange={(e) => setCommand(e.target.value)}
+                  placeholder="启动命令"
+                />
+                <Button onClick={onSaveProfile}>
+                  <Settings2 />
+                  保存启动配置
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {profiles.length > 0 && (
+          <Card>
+            <CardHeader className="sticky top-0 z-10 border-b border-border bg-card/95 pb-4 backdrop-blur supports-[backdrop-filter]:bg-card/85">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <Activity className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <CardTitle>运行控制</CardTitle>
+                    <CardDescription>
+                      {profiles.length} 个启动配置，当前运行 {runtimeSnapshot.activeSessions.length} 个。
+                    </CardDescription>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge
+                    variant="outline"
+                    className={
+                      runtimeSnapshot.activeSessions.length > 0
+                        ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-500"
+                        : "text-muted-foreground"
+                    }
+                  >
+                    运行 {runtimeSnapshot.activeSessions.length}/{profiles.length}
+                  </Badge>
+                  <Button
+                    size="sm"
+                    onClick={() => void onStartAll()}
+                    disabled={
+                      bulkAction !== null || runtimeSnapshot.startableProfiles.length === 0
+                    }
+                  >
+                    {bulkAction === "start" ? (
+                      <RefreshCw className="animate-spin" />
+                    ) : (
+                      <Play />
+                    )}
+                    {bulkAction === "start"
+                      ? "启动中…"
+                      : `全部启动 ${runtimeSnapshot.startableProfiles.length}`}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void onStopAll()}
+                    disabled={
+                      bulkAction !== null || runtimeSnapshot.stoppableSessions.length === 0
+                    }
+                  >
+                    <Square />
+                    {bulkAction === "stop"
+                      ? "停止中…"
+                      : `全部停止 ${runtimeSnapshot.stoppableSessions.length}`}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-5">
+              <div className="grid gap-3 xl:grid-cols-2">
+                {profiles.map((profile) => {
+                  const activeSession = activeSessionForProfile(
+                    sessionsById,
+                    profile.profile_id,
+                  );
+                  const lastSessionId = lastSessionByProfile[profile.profile_id];
+                  const displaySession =
+                    activeSession ??
+                    (lastSessionId ? sessionsById[lastSessionId] : undefined);
+                  const sessionLogs = displaySession
+                    ? logsBySessionId[displaySession.launch_session_id] ?? []
+                    : [];
+
+                  return (
+                    <Card
+                      key={profile.profile_id}
+                      className="gap-3 bg-background/40 shadow-none"
+                    >
+                      <CardHeader className="gap-3 px-4 pt-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <Badge variant="secondary">
+                            {labelStatus(profile.process_role)}
+                          </Badge>
+                          {displaySession ? (
+                            <Badge
+                              variant="outline"
+                              className={sessionBadgeClass(displaySession)}
+                            >
+                              {labelStatus(displaySession.state)} · PID {displaySession.pid ?? "—"}
+                              {displaySession.exit_code !== undefined &&
+                              displaySession.exit_code !== null
+                                ? ` · 退出码 ${displaySession.exit_code}`
+                                : ""}
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-muted-foreground">
+                              未运行
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="rounded-lg border border-border bg-muted/35 px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground">
+                          {profile.command}
+                        </div>
+                        <CardDescription
+                          className="truncate font-mono text-xs"
+                          title={profile.working_directory}
+                        >
+                          {formatDisplayPath(profile.working_directory)}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="mt-auto space-y-3 px-4 pb-4">
+                        <div className="flex flex-wrap gap-2">
+                          {activeSession ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => onStop(activeSession)}
+                              disabled={
+                                bulkAction !== null || activeSession.state === "STOPPING"
+                              }
+                            >
+                              <Square />
+                              {activeSession.state === "STOPPING" ? "停止中…" : "停止"}
+                            </Button>
+                          ) : (
+                            <>
+                              <Button
+                                size="sm"
+                                onClick={() => onStart(profile)}
+                                disabled={bulkAction !== null}
+                              >
+                                <Play />
+                                启动
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-muted-foreground hover:text-destructive"
+                                onClick={() => void onRemoveProfile(profile)}
+                                disabled={bulkAction !== null}
+                              >
+                                <Trash2 />
+                                移除
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                        {displaySession && (
+                          <div className="overflow-hidden rounded-lg border border-border bg-[var(--log-bg)]">
+                            <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
+                              <Terminal className="size-3.5" />
+                              会话输出
+                            </div>
+                            <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-xs leading-relaxed text-foreground">
+                              {sessionLogs.join("\n") || "暂无输出"}
+                            </pre>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </>
   );
 }

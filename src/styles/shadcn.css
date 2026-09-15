@@ -1,0 +1,46 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+:root {
+  --sh-background: var(--bg);
+  --sh-foreground: var(--text);
+  --sh-card: var(--surface);
+  --sh-card-foreground: var(--text-strong);
+  --sh-primary: var(--accent);
+  --sh-primary-foreground: #fff;
+  --sh-secondary: var(--secondary-btn-bg);
+  --sh-secondary-foreground: var(--text);
+  --sh-muted: var(--surface-raised);
+  --sh-muted-foreground: var(--muted);
+  --sh-accent: var(--nav-active-bg);
+  --sh-accent-foreground: var(--text-strong);
+  --sh-destructive: var(--danger);
+  --sh-border: var(--border);
+  --sh-input: var(--border);
+  --sh-ring: var(--accent);
+  --sh-radius: 0.625rem;
+}
+
+@theme inline {
+  --color-background: var(--sh-background);
+  --color-foreground: var(--sh-foreground);
+  --color-card: var(--sh-card);
+  --color-card-foreground: var(--sh-card-foreground);
+  --color-primary: var(--sh-primary);
+  --color-primary-foreground: var(--sh-primary-foreground);
+  --color-secondary: var(--sh-secondary);
+  --color-secondary-foreground: var(--sh-secondary-foreground);
+  --color-muted: var(--sh-muted);
+  --color-muted-foreground: var(--sh-muted-foreground);
+  --color-accent: var(--sh-accent);
+  --color-accent-foreground: var(--sh-accent-foreground);
+  --color-destructive: var(--sh-destructive);
+  --color-border: var(--sh-border);
+  --color-input: var(--sh-input);
+  --color-ring: var(--sh-ring);
+  --radius-sm: calc(var(--sh-radius) - 4px);
+  --radius-md: calc(var(--sh-radius) - 2px);
+  --radius-lg: var(--sh-radius);
+  --radius-xl: calc(var(--sh-radius) + 4px);
+}

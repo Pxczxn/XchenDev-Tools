@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { ThemeToggle } from "../components/ThemeToggle";
 import "../styles/app.css";
+import "../styles/shadcn.css";
 
 const links = [
   { to: "/", label: "系统概览" },
