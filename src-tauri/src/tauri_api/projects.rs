@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
-use crate::domain::{OperationResult, ProjectInfo};
+use crate::domain::{LaunchSessionState, OperationResult, ProjectInfo};
+use std::collections::HashSet;
 use tauri::State;
 
 #[tauri::command]
@@ -21,8 +22,30 @@ pub fn remove_project(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<OperationResult, String> {
+    let profile_ids: HashSet<String> = state
+        .config
+        .list_profiles_for_project(&project_id)
+        .into_iter()
+        .map(|profile| profile.profile_id)
+        .collect();
+
+    let has_active_session = state.command_runner.list_sessions().iter().any(|session| {
+        profile_ids.contains(&session.profile_id)
+            && matches!(
+                session.state,
+                LaunchSessionState::Starting
+                    | LaunchSessionState::Running
+                    | LaunchSessionState::Stopping
+            )
+    });
+    if has_active_session {
+        return Err("PROJECT_RUNNING:请先停止该项目的运行会话".to_string());
+    }
+
     if state.config.remove_project(&project_id)? {
-        Ok(OperationResult::succeeded("项目记录已移除，磁盘文件未删除"))
+        Ok(OperationResult::succeeded(
+            "项目记录与启动配置已移除，磁盘文件未删除",
+        ))
     } else {
         Ok(OperationResult::succeeded("项目记录不存在或已移除"))
     }
