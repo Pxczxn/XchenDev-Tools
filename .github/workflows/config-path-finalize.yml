@@ -32,22 +32,22 @@ jobs:
           replacements = {
               Path("src-tauri/src/config_store/mod.rs"): [
                   (
-                      '/// - 安装态：`%LOCALAPPDATA%\\\\XchenDev\\\\XchenDev-Tools\\\\config\\\\config.json`。',
-                      '/// - 安装态：`%LOCALAPPDATA%\\\\XchenDev-Tools\\\\config\\\\config.json`。',
+                      r'%LOCALAPPDATA%\XchenDev\XchenDev-Tools\config\config.json',
+                      r'%LOCALAPPDATA%\XchenDev-Tools\config\config.json',
                   ),
                   (
                       '        return PathBuf::from(local).join("XchenDev").join("XchenDev-Tools");',
                       '        return PathBuf::from(local).join("XchenDev-Tools");',
                   ),
                   (
-                      '            PathBuf::from("C:\\\\Users\\\\demo\\\\AppData\\\\Local")\n                .join("XchenDev")\n                .join("XchenDev-Tools")',
-                      '            PathBuf::from("C:\\\\Users\\\\demo\\\\AppData\\\\Local")\n                .join("XchenDev-Tools")',
+                      '                .join("XchenDev")\n                .join("XchenDev-Tools")',
+                      '                .join("XchenDev-Tools")',
                   ),
               ],
               Path("src/pages/SettingsPage.tsx"): [
                   (
-                      '<code>%LOCALAPPDATA%\\\\XchenDev\\\\XchenDev-Tools\\\\config</code>，与安装目录隔离。环境变量覆盖优先。',
-                      '<code>%LOCALAPPDATA%\\\\XchenDev-Tools\\\\config</code>，与安装目录隔离。环境变量覆盖优先。',
+                      r'%LOCALAPPDATA%\XchenDev\XchenDev-Tools\config',
+                      r'%LOCALAPPDATA%\XchenDev-Tools\config',
                   ),
               ],
           }
