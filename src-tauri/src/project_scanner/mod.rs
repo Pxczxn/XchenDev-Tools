@@ -20,9 +20,11 @@ const EVIDENCE_FILES: &[(&str, TechnologyStack)] = &[
     ("package.json", TechnologyStack::Node),
     ("pom.xml", TechnologyStack::Maven),
     ("build.gradle", TechnologyStack::Gradle),
+    ("build.gradle.kts", TechnologyStack::Gradle),
     ("requirements.txt", TechnologyStack::Python),
     ("pyproject.toml", TechnologyStack::Python),
     ("composer.json", TechnologyStack::Php),
+    ("Cargo.toml", TechnologyStack::Rust),
 ];
 
 const NODE_SCRIPT_PRIORITY: &[&str] = &["dev", "start", "serve", "develop", "watch"];
@@ -175,7 +177,7 @@ fn build_candidate(
             let content = fs::read_to_string(evidence).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
             let packaging_pom = xml_tag_value(&content, "packaging")
                 .is_some_and(|value| value.eq_ignore_ascii_case("pom"));
-            let is_spring_boot_module = content.contains("spring-boot-maven-plugin");
+            let is_spring_boot_module = is_spring_boot_maven(&content);
             let mvnw = dir.join("mvnw.cmd");
             let runner = if mvnw.is_file() { ".\\mvnw.cmd" } else { "mvn" };
 
@@ -202,11 +204,18 @@ fn build_candidate(
             })
         }
         TechnologyStack::Gradle => {
+            let content = fs::read_to_string(evidence).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
+            let is_spring_boot_module = content.contains("org.springframework.boot")
+                || content.contains("spring-boot-gradle-plugin");
             let gradlew = dir.join("gradlew.bat");
-            let cmd = if gradlew.is_file() {
-                ".\\gradlew.bat bootRun".to_string()
+            let suggested_command = if is_spring_boot_module {
+                Some(if gradlew.is_file() {
+                    ".\\gradlew.bat bootRun".to_string()
+                } else {
+                    "gradle bootRun".to_string()
+                })
             } else {
-                "gradle bootRun".to_string()
+                None
             };
             Ok(TechnologyCandidate {
                 id,
@@ -214,7 +223,24 @@ fn build_candidate(
                 evidence_file,
                 stack,
                 status: CandidateStatus::NeedsConfirmation,
-                suggested_command: Some(cmd),
+                suggested_command,
+                scripts: None,
+                conflict_group: None,
+            })
+        }
+        TechnologyStack::Rust => {
+            let is_binary = dir.join("src").join("main.rs").is_file();
+            Ok(TechnologyCandidate {
+                id,
+                directory,
+                evidence_file,
+                stack,
+                status: if is_binary {
+                    CandidateStatus::NeedsConfirmation
+                } else {
+                    CandidateStatus::EvidenceOnly
+                },
+                suggested_command: is_binary.then(|| "cargo run".to_string()),
                 scripts: None,
                 conflict_group: None,
             })
@@ -240,6 +266,13 @@ fn build_candidate(
             conflict_group: None,
         }),
     }
+}
+
+fn is_spring_boot_maven(content: &str) -> bool {
+    content.contains("spring-boot-maven-plugin")
+        || content.contains("spring-boot-starter-parent")
+        || content.contains("spring-boot-starter-")
+        || content.contains("spring-boot-dependencies")
 }
 
 fn xml_tag_value<'a>(content: &'a str, tag: &str) -> Option<&'a str> {
@@ -383,6 +416,76 @@ mod tests {
         let candidate = result.candidates.first().expect("candidate");
         assert_eq!(candidate.status, CandidateStatus::NeedsConfirmation);
         assert_eq!(candidate.suggested_command.as_deref(), Some("mvn spring-boot:run"));
+    }
+
+    #[test]
+    fn spring_boot_parent_or_starter_is_recognized_without_plugin_block() {
+        let root = tempdir().expect("tempdir");
+        fs::write(
+            root.path().join("pom.xml"),
+            "<project><parent><artifactId>spring-boot-starter-parent</artifactId></parent><dependencies><dependency><artifactId>spring-boot-starter-web</artifactId></dependency></dependencies></project>",
+        )
+        .expect("pom");
+
+        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let candidate = result.candidates.first().expect("candidate");
+        assert_eq!(candidate.stack, TechnologyStack::Maven);
+        assert_eq!(candidate.suggested_command.as_deref(), Some("mvn spring-boot:run"));
+    }
+
+    #[test]
+    fn gradle_kotlin_dsl_spring_boot_gets_bootrun_suggestion() {
+        let root = tempdir().expect("tempdir");
+        fs::write(
+            root.path().join("build.gradle.kts"),
+            "plugins { id(\"org.springframework.boot\") version \"3.5.0\" }",
+        )
+        .expect("gradle kts");
+        fs::write(root.path().join("gradlew.bat"), "@echo off").expect("wrapper");
+
+        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let candidate = result.candidates.first().expect("candidate");
+        assert_eq!(candidate.stack, TechnologyStack::Gradle);
+        assert_eq!(candidate.suggested_command.as_deref(), Some(".\\gradlew.bat bootRun"));
+    }
+
+    #[test]
+    fn plain_gradle_project_does_not_invent_bootrun() {
+        let root = tempdir().expect("tempdir");
+        fs::write(root.path().join("build.gradle"), "plugins { id 'java' }").expect("gradle");
+
+        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let candidate = result.candidates.first().expect("candidate");
+        assert_eq!(candidate.stack, TechnologyStack::Gradle);
+        assert!(candidate.suggested_command.is_none());
+    }
+
+    #[test]
+    fn rust_binary_project_suggests_cargo_run() {
+        let root = tempdir().expect("tempdir");
+        fs::create_dir_all(root.path().join("src")).expect("src");
+        fs::write(root.path().join("Cargo.toml"), "[package]\nname='demo'\nversion='0.1.0'\n").expect("cargo");
+        fs::write(root.path().join("src").join("main.rs"), "fn main() {}\n").expect("main");
+
+        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let candidate = result.candidates.first().expect("candidate");
+        assert_eq!(candidate.stack, TechnologyStack::Rust);
+        assert_eq!(candidate.status, CandidateStatus::NeedsConfirmation);
+        assert_eq!(candidate.suggested_command.as_deref(), Some("cargo run"));
+    }
+
+    #[test]
+    fn rust_library_project_is_evidence_only() {
+        let root = tempdir().expect("tempdir");
+        fs::create_dir_all(root.path().join("src")).expect("src");
+        fs::write(root.path().join("Cargo.toml"), "[package]\nname='demo-lib'\nversion='0.1.0'\n").expect("cargo");
+        fs::write(root.path().join("src").join("lib.rs"), "pub fn demo() {}\n").expect("lib");
+
+        let result = scan_project_directory(root.path().to_str().expect("root path")).expect("scan");
+        let candidate = result.candidates.first().expect("candidate");
+        assert_eq!(candidate.stack, TechnologyStack::Rust);
+        assert_eq!(candidate.status, CandidateStatus::EvidenceOnly);
+        assert!(candidate.suggested_command.is_none());
     }
 
     #[test]
