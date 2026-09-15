@@ -3,6 +3,7 @@ use crate::domain::{LaunchSessionState, OperationResult, ProjectInfo};
 use std::collections::HashSet;
 use tauri::State;
 
+use super::config_transaction::with_config_rollback;
 use super::launch_profiles::launch_lifecycle_lock;
 
 #[tauri::command]
@@ -16,7 +17,9 @@ pub fn upsert_project(
     root_path: String,
     name: Option<String>,
 ) -> Result<ProjectInfo, String> {
-    state.config.upsert_project(&root_path, name.as_deref())
+    with_config_rollback(&state, || {
+        state.config.upsert_project(&root_path, name.as_deref())
+    })
 }
 
 #[tauri::command]
@@ -48,7 +51,8 @@ pub fn remove_project(
         return Err("PROJECT_RUNNING:请先停止该项目的运行会话".to_string());
     }
 
-    if state.config.remove_project(&project_id)? {
+    let removed = with_config_rollback(&state, || state.config.remove_project(&project_id))?;
+    if removed {
         Ok(OperationResult::succeeded(
             "项目记录与启动配置已移除，磁盘文件未删除",
         ))
