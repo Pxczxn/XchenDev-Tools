@@ -10,6 +10,7 @@ pub mod process_manager;
 pub mod project_scanner;
 pub mod security_guard;
 pub mod service_manager;
+mod settings_guard;
 pub mod tauri_api;
 
 use app_state::AppState;
