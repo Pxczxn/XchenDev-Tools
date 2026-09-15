@@ -128,7 +128,7 @@ export async function saveManualOverride(
   runtimeKind: string,
   executablePath: string,
 ): Promise<EnvironmentCandidate> {
-  return invoke("save_manual_override", { runtimeKind, executablePath });
+  return invoke("save_manual_override_safe", { runtimeKind, executablePath });
 }
 
 export async function inspectPort(
