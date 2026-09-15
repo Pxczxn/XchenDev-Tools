@@ -117,7 +117,13 @@ pub fn terminate_pid_with_extra(
 }
 
 pub fn digest_for(pid: u32, name: &str, cwd: Option<&str>) -> String {
-    snapshot_digest(pid, name, cwd)
+    // Bind directory-operation snapshots to process creation identity as well as PID/name/cwd.
+    // If Windows reuses the PID before the user confirms termination, the recomputed digest changes.
+    let start_time = process_start_time_secs(pid)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "missing".to_string());
+    let identity_name = format!("{}|start={}", name, start_time);
+    snapshot_digest(pid, &identity_name, cwd)
 }
 
 pub fn protection(summary: &ProcessSummary) -> ProtectionDecision {
