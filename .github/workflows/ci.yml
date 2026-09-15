@@ -38,6 +38,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Frontend dependency audit
+        run: npm audit --audit-level=moderate
+
       - name: Frontend tests
         run: npm test
 
@@ -45,4 +48,4 @@ jobs:
         run: npm run build
 
       - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=1
