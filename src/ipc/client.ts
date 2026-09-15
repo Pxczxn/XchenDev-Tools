@@ -207,6 +207,12 @@ export async function saveLaunchProfile(args: {
   });
 }
 
+export async function removeLaunchProfile(
+  profileId: string,
+): Promise<OperationResult> {
+  return invoke("remove_launch_profile_safe", { profileId });
+}
+
 export async function listLaunchProfiles(
   projectId: string,
 ): Promise<LaunchProfile[]> {
