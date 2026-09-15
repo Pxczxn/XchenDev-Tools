@@ -56,6 +56,13 @@ fn logical_workdir_key(path: &str) -> String {
         .to_lowercase()
 }
 
+fn has_navigation_segment(path: &str) -> bool {
+    path.trim()
+        .replace('/', "\\")
+        .split('\\')
+        .any(|segment| matches!(segment, "." | ".."))
+}
+
 fn logical_path_is_within(root_key: &str, path_key: &str) -> bool {
     if root_key.is_empty() || path_key.is_empty() {
         return false;
@@ -76,6 +83,12 @@ fn validate_import_projects(config: &AppConfig) -> Result<(), String> {
         if !project_ids.insert(project.project_id.clone()) {
             return Err(format!(
                 "PROFILE_INVALID:存在重复项目 ID {}",
+                project.project_id
+            ));
+        }
+        if has_navigation_segment(&project.root_path) {
+            return Err(format!(
+                "PROFILE_INVALID:项目 {} 的根目录不能包含 . 或 .. 导航段",
                 project.project_id
             ));
         }
@@ -131,6 +144,12 @@ fn validate_import_profiles(config: &AppConfig) -> Result<(), String> {
 
         security_guard::validate_command_policy(profile.command.trim())?;
 
+        if has_navigation_segment(&profile.working_directory) {
+            return Err(format!(
+                "PROFILE_INVALID:启动配置 {} 的工作目录不能包含 . 或 .. 导航段",
+                profile.profile_id
+            ));
+        }
         let workdir_key = logical_workdir_key(&profile.working_directory);
         if workdir_key.is_empty() {
             return Err(format!(
@@ -328,6 +347,19 @@ mod tests {
     }
 
     #[test]
+    fn import_rejects_project_root_navigation_segment() {
+        let mut config = AppConfig::default();
+        let mut invalid = project();
+        invalid.root_path = "C:\\demo\\..\\other".to_string();
+        config.projects.push(invalid);
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("project root navigation must fail");
+        assert!(err.contains("PROFILE_INVALID"));
+        assert!(err.contains("根目录不能包含 . 或 .."));
+    }
+
+    #[test]
     fn import_rejects_duplicate_profile_id() {
         let mut config = AppConfig::default();
         config.projects.push(project());
@@ -383,6 +415,38 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serialize");
         let err = normalize_import_content(&json).expect_err("outside workdir must fail");
         assert!(err.contains("工作目录不属于项目"));
+    }
+
+    #[test]
+    fn import_rejects_workdir_parent_navigation_segment() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config.launch_profiles.push(profile(
+            "profile-a",
+            "C:\\demo\\..\\other",
+            Some("candidate-a"),
+        ));
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("parent navigation must fail");
+        assert!(err.contains("PROFILE_INVALID"));
+        assert!(err.contains("工作目录不能包含 . 或 .."));
+    }
+
+    #[test]
+    fn import_rejects_workdir_current_navigation_segment() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config.launch_profiles.push(profile(
+            "profile-a",
+            "C:\\demo\\.\\web",
+            Some("candidate-a"),
+        ));
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("current navigation must fail");
+        assert!(err.contains("PROFILE_INVALID"));
+        assert!(err.contains("工作目录不能包含 . 或 .."));
     }
 
     #[test]
