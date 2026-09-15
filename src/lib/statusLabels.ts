@@ -115,6 +115,7 @@ const STATUS_LABELS: Record<string, string> = {
   SERVICE_CONTROL_FAILED: "服务控制失败",
   SERVICE_CONTROL_DENIED: "服务控制被拒绝",
   SERVICE_CONTROL_TIMEOUT: "等待服务状态变化超时",
+  SERVICE_CONTROL_LOCK_FAILED: "服务控制正忙，请稍后重试",
   SERVICE_ACTION_INVALID: "服务操作无效",
 };
 
