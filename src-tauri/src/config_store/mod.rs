@@ -421,7 +421,7 @@ pub fn open_at(path: PathBuf) -> ConfigStore {
 
 /// 默认配置位置：
 /// - 开发态（`tauri dev` / 仓库 target）：仓库根目录 `config/config.json`；
-/// - 安装态：`%LOCALAPPDATA%\XchenDev-Tools\config\config.json`。
+/// - 安装态：`%LOCALAPPDATA%\XchenDev\XchenDev-Tools\config\config.json`。
 ///
 /// `XCHEN_CONFIG_FILE`、`XCHEN_CONFIG_DIR`、`XCHEN_TOOLS_HOME` 可显式覆盖默认位置。
 pub fn config_file_path() -> PathBuf {
@@ -470,7 +470,7 @@ fn resolve_app_base_dir(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return PathBuf::from(local).join("XchenDev-Tools");
+        return PathBuf::from(local).join("XchenDev").join("XchenDev-Tools");
     }
     if let Some(parent) = executable.and_then(Path::parent) {
         return parent.to_path_buf();
@@ -610,7 +610,9 @@ mod tests {
         );
         assert_eq!(
             resolved,
-            PathBuf::from("C:\\Users\\demo\\AppData\\Local").join("XchenDev-Tools")
+            PathBuf::from("C:\\Users\\demo\\AppData\\Local")
+                .join("XchenDev")
+                .join("XchenDev-Tools")
         );
     }
 
