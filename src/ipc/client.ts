@@ -73,7 +73,7 @@ export async function getAppSettings(): Promise<AppSettings> {
 export async function saveAppSettings(
   settings: AppSettings,
 ): Promise<OperationResult> {
-  return invoke("save_app_settings", { settings });
+  return invoke("save_app_settings_safe", { settings });
 }
 
 export async function listAuditEvents(limit = 20): Promise<AuditEvent[]> {
