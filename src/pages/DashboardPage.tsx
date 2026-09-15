@@ -21,8 +21,8 @@ export function DashboardPage() {
   const [runtimeItems, setRuntimeItems] = useState<RuntimeItem[]>([]);
   const [recentErrors, setRecentErrors] = useState<RecentError[]>([]);
 
-  const load = useCallback(async () => {
-    setState("loading");
+  const refreshDashboard = useCallback(async (showLoading: boolean) => {
+    if (showLoading) setState("loading");
     setErrorCode(null);
     try {
       const [data, items, errors] = await Promise.all([
@@ -39,22 +39,22 @@ export function DashboardPage() {
       setErrorCode(err.code ?? "UNKNOWN");
       setHealth(null);
       setRuntimeItems([]);
+      setRecentErrors([]);
       setState("error");
     }
   }, []);
 
   useEffect(() => {
-    load();
+    void refreshDashboard(true);
     const timer = window.setInterval(() => {
-      Promise.all([listRuntimeItems(), listRecentErrors(8)])
-        .then(([items, errors]) => {
-          setRuntimeItems(items);
-          setRecentErrors(errors);
-        })
-        .catch(() => undefined);
+      void refreshDashboard(false);
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [load]);
+  }, [refreshDashboard]);
+
+  async function onRefresh() {
+    await refreshDashboard(true);
+  }
 
   return (
     <>
@@ -62,8 +62,13 @@ export function DashboardPage() {
         title="系统概览"
         description="本机运行状态、服务与最近错误一览"
         actions={
-          <button type="button" className="secondary btn-sm" onClick={load}>
-            刷新
+          <button
+            type="button"
+            className="secondary btn-sm"
+            onClick={onRefresh}
+            disabled={state === "loading"}
+          >
+            {state === "loading" ? "刷新中…" : "刷新"}
           </button>
         }
       />
@@ -117,7 +122,7 @@ export function DashboardPage() {
                   </span>
                 </div>
                 <div className="stat-item">
-                  <button type="button" className="btn-sm" onClick={load}>
+                  <button type="button" className="btn-sm" onClick={onRefresh}>
                     重试
                   </button>
                 </div>
