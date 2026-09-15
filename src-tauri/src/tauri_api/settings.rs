@@ -1,9 +1,8 @@
 use crate::app_state::AppState;
+use crate::config_transaction::with_config_rollback;
 use crate::domain::{AppSettings, OperationResult};
 use crate::settings_guard::normalize_settings;
 use tauri::State;
-
-use super::config_transaction::with_config_rollback;
 
 #[tauri::command]
 pub fn save_app_settings_safe(
