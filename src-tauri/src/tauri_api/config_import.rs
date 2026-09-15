@@ -4,6 +4,7 @@ use crate::domain::{LaunchSessionState, OperationResult};
 use crate::settings_guard::normalize_settings;
 use tauri::State;
 
+use super::config_transaction::with_config_rollback;
 use super::launch_profiles::launch_lifecycle_lock;
 
 fn lock_launch_lifecycle() -> Result<std::sync::MutexGuard<'static, ()>, String> {
@@ -37,6 +38,11 @@ fn normalize_import_content(content: &str) -> Result<String, String> {
     serde_json::to_string_pretty(&parsed).map_err(|e| format!("PROFILE_INVALID:{}", e))
 }
 
+fn import_normalized(state: &AppState, content: &str) -> Result<(), String> {
+    let normalized = normalize_import_content(content)?;
+    with_config_rollback(state, || state.config.import_json(&normalized))
+}
+
 #[tauri::command]
 pub fn import_app_config_safe(
     state: State<'_, AppState>,
@@ -44,8 +50,7 @@ pub fn import_app_config_safe(
 ) -> Result<OperationResult, String> {
     let _lifecycle_guard = lock_launch_lifecycle()?;
     ensure_no_active_launch_sessions(&state)?;
-    let normalized = normalize_import_content(&content)?;
-    state.config.import_json(&normalized)?;
+    import_normalized(&state, &content)?;
     Ok(OperationResult::succeeded("配置已导入"))
 }
 
@@ -58,8 +63,7 @@ pub fn import_app_config_from_path_safe(
     ensure_no_active_launch_sessions(&state)?;
     let data = std::fs::read_to_string(&source_path)
         .map_err(|e| format!("PROFILE_INVALID:无法读取文件 {}", e))?;
-    let normalized = normalize_import_content(&data)?;
-    state.config.import_json(&normalized)?;
+    import_normalized(&state, &data)?;
     Ok(OperationResult::succeeded("配置已导入"))
 }
 
