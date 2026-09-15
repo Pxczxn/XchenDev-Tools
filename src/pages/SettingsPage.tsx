@@ -1,6 +1,6 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   exportAppConfig,
   exportAppConfigToPath,
@@ -47,6 +47,8 @@ export function SettingsPage() {
   const [serviceHintsText, setServiceHintsText] = useState("");
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [defaultProtected, setDefaultProtected] = useState<string[]>([]);
+  const [operationBusy, setOperationBusy] = useState(false);
+  const operationBusyRef = useRef(false);
 
   useEffect(() => {
     invoke<[string, string]>("get_config_paths")
@@ -107,8 +109,22 @@ export function SettingsPage() {
     await setTheme(normalizeTheme(s.theme));
   }
 
-  async function onSaveSettings() {
+  async function runConfigOperation(operation: () => Promise<void>) {
+    if (operationBusyRef.current) return;
+    operationBusyRef.current = true;
+    setOperationBusy(true);
     try {
+      await operation();
+    } catch (e) {
+      setMessage(labelErrorText(String(e)));
+    } finally {
+      operationBusyRef.current = false;
+      setOperationBusy(false);
+    }
+  }
+
+  async function onSaveSettings() {
+    await runConfigOperation(async () => {
       const extra = protectedText
         .split(/\r?\n/)
         .map((l) => l.trim())
@@ -148,23 +164,19 @@ export function SettingsPage() {
         formatOperationMessage(result.status, result.message, result.reason_code),
       );
       setAuditEvents(await listAuditEvents(15));
-    } catch (e) {
-      setMessage(labelErrorText(String(e)));
-    }
+    });
   }
 
   async function onExportClipboard() {
-    try {
+    await runConfigOperation(async () => {
       const json = await exportAppConfig();
       await navigator.clipboard.writeText(json);
       setMessage("配置已复制到剪贴板");
-    } catch (e) {
-      setMessage(labelErrorText(String(e)));
-    }
+    });
   }
 
   async function onExportFile() {
-    try {
+    await runConfigOperation(async () => {
       const path = await save({
         defaultPath: "config.json",
         filters: [{ name: "JSON", extensions: ["json"] }],
@@ -174,13 +186,11 @@ export function SettingsPage() {
       setMessage(
         formatOperationMessage(result.status, result.message, result.reason_code),
       );
-    } catch (e) {
-      setMessage(labelErrorText(String(e)));
-    }
+    });
   }
 
   async function onImportFromFile() {
-    try {
+    await runConfigOperation(async () => {
       const path = await open({
         multiple: false,
         filters: [{ name: "JSON", extensions: ["json"] }],
@@ -193,15 +203,14 @@ export function SettingsPage() {
       setMessage(
         formatOperationMessage(result.status, result.message, result.reason_code),
       );
-    } catch (e) {
-      setMessage(labelErrorText(String(e)));
-    }
+    });
   }
 
   async function onImportPaste() {
     if (!importText.trim()) return;
-    try {
-      const result = await importAppConfig(importText);
+    const content = importText;
+    await runConfigOperation(async () => {
+      const result = await importAppConfig(content);
       if (result.status === "SUCCEEDED") {
         await reloadSettingsFromConfig();
       }
@@ -209,9 +218,7 @@ export function SettingsPage() {
         formatOperationMessage(result.status, result.message, result.reason_code),
       );
       setImportText("");
-    } catch (e) {
-      setMessage(labelErrorText(String(e)));
-    }
+    });
   }
 
   return (
@@ -248,6 +255,7 @@ export function SettingsPage() {
           <select
             value={theme}
             onChange={(e) => void setTheme(e.target.value as ThemeMode)}
+            disabled={operationBusy}
           >
             <option value="dark">深色</option>
             <option value="light">浅色</option>
@@ -268,6 +276,7 @@ export function SettingsPage() {
               })
             }
             className="input-narrow"
+            disabled={operationBusy}
           />
         </div>
         <p className="muted env-hint">
@@ -285,12 +294,14 @@ export function SettingsPage() {
           value={protectedText}
           onChange={(e) => setProtectedText(e.target.value)}
           placeholder="例如：my-service.exe"
+          disabled={operationBusy}
         />
         <p className="muted env-hint">检测路径提示（每行 runtime=path，如 node=C:\node\node.exe）</p>
         <textarea
           className="settings-import-area"
           value={hintsText}
           onChange={(e) => setHintsText(e.target.value)}
+          disabled={operationBusy}
         />
         <p className="muted env-hint">
           环境管理页显示的运行时（取消勾选后不再检测、不展示该类型）
@@ -303,6 +314,7 @@ export function SettingsPage() {
                 <input
                   type="checkbox"
                   checked={enabled}
+                  disabled={operationBusy}
                   onChange={(e) => {
                     const nextDisabled = e.target.checked
                       ? settings.disabled_runtime_kinds.filter((k) => k !== id)
@@ -329,6 +341,7 @@ export function SettingsPage() {
                 <input
                   type="checkbox"
                   checked={enabled}
+                  disabled={operationBusy}
                   onChange={(e) => {
                     const next = e.target.checked
                       ? sanitizeManagedServiceKinds([
@@ -355,9 +368,12 @@ export function SettingsPage() {
           value={serviceHintsText}
           onChange={(e) => setServiceHintsText(e.target.value)}
           placeholder={"mysql=MySQL80\nredis=redis"}
+          disabled={operationBusy}
         />
         <div className="form-row env-manual-form">
-          <button type="button" onClick={onSaveSettings}>保存设置</button>
+          <button type="button" onClick={onSaveSettings} disabled={operationBusy}>
+            {operationBusy ? "处理中…" : "保存设置"}
+          </button>
         </div>
         </div>
       </div>
@@ -368,18 +384,21 @@ export function SettingsPage() {
         </div>
         <div className="card-body">
         <div className="form-row">
-          <button type="button" onClick={onExportClipboard}>复制到剪贴板</button>
-          <button type="button" className="secondary" onClick={onExportFile}>导出到文件</button>
-          <button type="button" className="secondary" onClick={onImportFromFile}>从文件导入</button>
+          <button type="button" onClick={onExportClipboard} disabled={operationBusy}>复制到剪贴板</button>
+          <button type="button" className="secondary" onClick={onExportFile} disabled={operationBusy}>导出到文件</button>
+          <button type="button" className="secondary" onClick={onImportFromFile} disabled={operationBusy}>从文件导入</button>
         </div>
         <textarea
           className="settings-import-area"
           placeholder="或粘贴 JSON 配置后点击导入"
           value={importText}
           onChange={(e) => setImportText(e.target.value)}
+          disabled={operationBusy}
         />
         <div className="form-row env-manual-form">
-          <button type="button" onClick={onImportPaste}>导入粘贴内容</button>
+          <button type="button" onClick={onImportPaste} disabled={operationBusy || !importText.trim()}>
+            {operationBusy ? "处理中…" : "导入粘贴内容"}
+          </button>
         </div>
         </div>
       </div>
