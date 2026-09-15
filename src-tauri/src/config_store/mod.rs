@@ -175,6 +175,8 @@ impl ConfigStore {
             .retain(|project| project.project_id != project_id);
         let removed = cfg.projects.len() != before;
         if removed {
+            cfg.launch_profiles
+                .retain(|profile| profile.project_id != project_id);
             persist(&self.path, &cfg)?;
         }
         Ok(removed)
