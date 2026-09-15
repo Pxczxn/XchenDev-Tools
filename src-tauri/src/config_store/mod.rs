@@ -197,6 +197,18 @@ impl ConfigStore {
         Ok(())
     }
 
+    pub fn remove_launch_profile(&self, profile_id: &str) -> Result<bool, String> {
+        let mut cfg = self.config.lock().map_err(|_| "config lock poisoned".to_string())?;
+        let before = cfg.launch_profiles.len();
+        cfg.launch_profiles
+            .retain(|profile| profile.profile_id != profile_id);
+        let removed = cfg.launch_profiles.len() != before;
+        if removed {
+            persist(&self.path, &cfg)?;
+        }
+        Ok(removed)
+    }
+
     pub fn list_profiles_for_project(&self, project_id: &str) -> Vec<LaunchProfile> {
         self.config
             .lock()
