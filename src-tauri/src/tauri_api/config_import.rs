@@ -1,10 +1,12 @@
 use crate::app_state::AppState;
 use crate::config_store::AppConfig;
 use crate::config_transaction::with_config_rollback;
-use crate::domain::{LaunchSessionState, OperationResult};
+use crate::domain::{LaunchSessionState, OperationResult, ProcessRole};
 use crate::history_retention::prune_config_history;
+use crate::security_guard;
 use crate::settings_guard::normalize_settings;
 use chrono::Utc;
+use std::collections::HashSet;
 use tauri::State;
 
 use super::launch_profiles::launch_lifecycle_lock;
@@ -33,10 +35,59 @@ fn ensure_no_active_launch_sessions(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+fn role_key(role: &ProcessRole) -> &'static str {
+    match role {
+        ProcessRole::Frontend => "frontend",
+        ProcessRole::Backend => "backend",
+    }
+}
+
+fn validate_import_profiles(config: &AppConfig) -> Result<(), String> {
+    let mut slots = HashSet::new();
+    let mut candidates = HashSet::new();
+
+    for profile in &config.launch_profiles {
+        security_guard::validate_command_policy(profile.command.trim())?;
+
+        let slot = format!(
+            "{}|{}|{}",
+            profile.project_id,
+            role_key(&profile.process_role),
+            profile.working_directory.trim().to_lowercase()
+        );
+        if !slots.insert(slot) {
+            return Err(format!(
+                "PROFILE_INVALID:项目 {} 存在重复的 {} 启动配置工作目录 {}",
+                profile.project_id,
+                role_key(&profile.process_role),
+                profile.working_directory
+            ));
+        }
+
+        if let Some(candidate_id) = profile
+            .source_candidate_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let binding = format!("{}|{}", profile.project_id, candidate_id.to_lowercase());
+            if !candidates.insert(binding) {
+                return Err(format!(
+                    "PROFILE_INVALID:项目 {} 的候选 {} 被多个启动配置重复绑定",
+                    profile.project_id, candidate_id
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn normalize_import_content(content: &str) -> Result<String, String> {
     let mut parsed: AppConfig =
         serde_json::from_str(content).map_err(|e| format!("PROFILE_INVALID:{}", e))?;
     parsed.settings = normalize_settings(parsed.settings)?;
+    validate_import_profiles(&parsed)?;
     prune_config_history(&mut parsed, Utc::now());
     serde_json::to_string_pretty(&parsed).map_err(|e| format!("PROFILE_INVALID:{}", e))
 }
@@ -73,6 +124,30 @@ pub fn import_app_config_from_path_safe(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{LaunchProfile, ProjectInfo};
+
+    fn project() -> ProjectInfo {
+        ProjectInfo {
+            project_id: "project-a".to_string(),
+            name: "demo".to_string(),
+            root_path: "C:\\demo".to_string(),
+            created_at: "2026-09-15T00:00:00Z".to_string(),
+            updated_at: "2026-09-15T00:00:00Z".to_string(),
+        }
+    }
+
+    fn profile(id: &str, workdir: &str, candidate: Option<&str>) -> LaunchProfile {
+        LaunchProfile {
+            profile_id: id.to_string(),
+            project_id: "project-a".to_string(),
+            process_role: ProcessRole::Frontend,
+            working_directory: workdir.to_string(),
+            command: "npm run dev".to_string(),
+            source_candidate_id: candidate.map(str::to_string),
+            user_modified: true,
+            port_hint: None,
+        }
+    }
 
     #[test]
     fn empty_runner_allows_config_import_guard() {
@@ -99,5 +174,52 @@ mod tests {
         let parsed: AppConfig = serde_json::from_str(&normalized).expect("deserialize");
         assert_eq!(parsed.settings.theme, "dark");
         assert_eq!(parsed.settings.disabled_runtime_kinds, vec!["java"]);
+    }
+
+    #[test]
+    fn import_rejects_duplicate_logical_launch_slot() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config
+            .launch_profiles
+            .push(profile("profile-a", "C:\\demo\\web", Some("candidate-a")));
+        config
+            .launch_profiles
+            .push(profile("profile-b", "c:\\DEMO\\web", Some("candidate-b")));
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("duplicate slot must fail");
+        assert!(err.contains("PROFILE_INVALID"));
+        assert!(err.contains("重复"));
+    }
+
+    #[test]
+    fn import_rejects_duplicate_candidate_binding() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        config
+            .launch_profiles
+            .push(profile("profile-a", "C:\\demo\\web-a", Some("candidate-a")));
+        config
+            .launch_profiles
+            .push(profile("profile-b", "C:\\demo\\web-b", Some("CANDIDATE-A")));
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("duplicate candidate must fail");
+        assert!(err.contains("PROFILE_INVALID"));
+        assert!(err.contains("重复绑定"));
+    }
+
+    #[test]
+    fn import_rejects_unsafe_launch_command_before_storage() {
+        let mut config = AppConfig::default();
+        config.projects.push(project());
+        let mut unsafe_profile = profile("profile-a", "C:\\demo\\web", Some("candidate-a"));
+        unsafe_profile.command = "cmd /C echo unsafe".to_string();
+        config.launch_profiles.push(unsafe_profile);
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let err = normalize_import_content(&json).expect_err("unsafe command must fail");
+        assert!(err.contains("COMMAND_POLICY_REJECTED"));
     }
 }
