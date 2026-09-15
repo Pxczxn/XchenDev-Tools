@@ -77,11 +77,11 @@ export async function saveAppSettings(
 }
 
 export async function listAuditEvents(limit = 20): Promise<AuditEvent[]> {
-  return invoke("list_audit_events", { limit });
+  return invoke("list_audit_events_safe", { limit });
 }
 
 export async function listRecentErrors(limit = 10): Promise<RecentError[]> {
-  return invoke("list_recent_errors", { limit });
+  return invoke("list_recent_errors_safe", { limit });
 }
 
 export async function listDefaultProtectedProcesses(): Promise<string[]> {
