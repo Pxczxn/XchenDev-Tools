@@ -10,8 +10,8 @@ use tauri::State;
 use uuid::Uuid;
 
 pub(crate) fn launch_lifecycle_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new(());
-    &LOCK
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn lock_launch_lifecycle() -> Result<std::sync::MutexGuard<'static, ()>, String> {
