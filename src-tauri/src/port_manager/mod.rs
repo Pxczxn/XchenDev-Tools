@@ -2,6 +2,16 @@ use crate::domain::{PortOccupancy, ProcessSummary};
 use crate::process_manager::{find_process_summary, protection};
 use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo};
 
+fn associated_pids_or_unknown(pids: &[u32]) -> Vec<u32> {
+    if pids.is_empty() {
+        return vec![0];
+    }
+    let mut unique = pids.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
+    unique
+}
+
 pub fn inspect_port(protocol: &str, port: u16) -> Result<Vec<PortOccupancy>, String> {
     if port == 0 {
         return Err("PORT_INVALID:端口无效".to_string());
@@ -34,30 +44,32 @@ pub fn inspect_port(protocol: &str, port: u16) -> Result<Vec<PortOccupancy>, Str
         if sock_proto == "udp" && !filter_udp {
             continue;
         }
-        let pid = sock.associated_pids.first().copied().unwrap_or(0);
-        let process = if pid > 0 {
-            find_process_summary(pid).unwrap_or(ProcessSummary {
-                pid,
-                name: "unknown".to_string(),
-                working_directory: None,
-                command_line: None,
-            })
-        } else {
-            ProcessSummary {
-                pid: 0,
-                name: "unknown".to_string(),
-                working_directory: None,
-                command_line: None,
-            }
-        };
-        let prot = protection(&process);
-        result.push(PortOccupancy {
-            protocol: sock_proto.to_string(),
-            port,
-            listen_address: listen_addr,
-            process,
-            protection: prot,
-        });
+
+        for pid in associated_pids_or_unknown(&sock.associated_pids) {
+            let process = if pid > 0 {
+                find_process_summary(pid).unwrap_or(ProcessSummary {
+                    pid,
+                    name: "unknown".to_string(),
+                    working_directory: None,
+                    command_line: None,
+                })
+            } else {
+                ProcessSummary {
+                    pid: 0,
+                    name: "unknown".to_string(),
+                    working_directory: None,
+                    command_line: None,
+                }
+            };
+            let prot = protection(&process);
+            result.push(PortOccupancy {
+                protocol: sock_proto.to_string(),
+                port,
+                listen_address: listen_addr.clone(),
+                process,
+                protection: prot,
+            });
+        }
     }
     Ok(result)
 }
@@ -82,4 +94,19 @@ pub fn ports_for_pid(pid: u32) -> Vec<u16> {
     ports.sort_unstable();
     ports.dedup();
     ports
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn associated_pids_are_deduplicated_and_sorted() {
+        assert_eq!(associated_pids_or_unknown(&[9, 3, 9, 5]), vec![3, 5, 9]);
+    }
+
+    #[test]
+    fn empty_associated_pids_keep_unknown_row() {
+        assert_eq!(associated_pids_or_unknown(&[]), vec![0]);
+    }
 }
