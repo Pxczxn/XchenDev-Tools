@@ -2,6 +2,14 @@ use crate::app_state::AppState;
 use crate::domain::{LaunchSessionState, OperationResult};
 use tauri::State;
 
+use super::launch_profiles::launch_lifecycle_lock;
+
+fn lock_launch_lifecycle() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    launch_lifecycle_lock()
+        .lock()
+        .map_err(|_| "LAUNCH_LIFECYCLE_LOCK_FAILED:启动关系锁失败".to_string())
+}
+
 fn ensure_no_active_launch_sessions(state: &AppState) -> Result<(), String> {
     let has_active = state.command_runner.list_sessions().iter().any(|session| {
         matches!(
@@ -25,6 +33,7 @@ pub fn import_app_config_safe(
     state: State<'_, AppState>,
     content: String,
 ) -> Result<OperationResult, String> {
+    let _lifecycle_guard = lock_launch_lifecycle()?;
     ensure_no_active_launch_sessions(&state)?;
     state.config.import_json(&content)?;
     Ok(OperationResult::succeeded("配置已导入"))
@@ -35,6 +44,7 @@ pub fn import_app_config_from_path_safe(
     state: State<'_, AppState>,
     source_path: String,
 ) -> Result<OperationResult, String> {
+    let _lifecycle_guard = lock_launch_lifecycle()?;
     ensure_no_active_launch_sessions(&state)?;
     let data = std::fs::read_to_string(&source_path)
         .map_err(|e| format!("PROFILE_INVALID:无法读取文件 {}", e))?;
