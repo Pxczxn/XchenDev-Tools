@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::config_store::project_id_from_path;
 use crate::domain::{
     AppSettings, DirectoryProcessMatch, HealthCheckResponse, LaunchProfile, OperationResult,
-    ProjectScanResult, WindowsServiceInfo,
+    ProcessSummary, ProjectScanResult, ProtectionDecision, WindowsServiceInfo,
 };
 use crate::environment_detector;
 use crate::port_manager;
@@ -10,9 +10,20 @@ use crate::process_manager;
 use crate::project_scanner;
 use crate::security_guard;
 use crate::service_manager;
+use serde::Serialize;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 use tauri::State;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PortOccupancySnapshot {
+    pub protocol: String,
+    pub port: u16,
+    pub listen_address: String,
+    pub process: ProcessSummary,
+    pub protection: ProtectionDecision,
+    pub snapshot_digest: String,
+}
 
 #[tauri::command]
 pub fn health_check() -> Result<HealthCheckResponse, crate::error::AppError> {
@@ -46,13 +57,28 @@ pub fn inspect_port(
     state: State<'_, AppState>,
     protocol: String,
     port: u16,
-) -> Result<Vec<crate::domain::PortOccupancy>, String> {
+) -> Result<Vec<PortOccupancySnapshot>, String> {
     let extra = state.config.extra_protected_names();
-    let mut rows = port_manager::inspect_port(&protocol, port)?;
-    for row in &mut rows {
-        row.protection = process_manager::protection_with_extra(&row.process, &extra);
-    }
-    Ok(rows)
+    let rows = port_manager::inspect_port(&protocol, port)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let snapshot_digest = process_manager::digest_for(
+                row.process.pid,
+                &row.process.name,
+                row.process.working_directory.as_deref(),
+            );
+            let protection = process_manager::protection_with_extra(&row.process, &extra);
+            PortOccupancySnapshot {
+                protocol: row.protocol,
+                port: row.port,
+                listen_address: row.listen_address,
+                process: row.process,
+                protection,
+                snapshot_digest,
+            }
+        })
+        .collect())
 }
 
 #[tauri::command]
