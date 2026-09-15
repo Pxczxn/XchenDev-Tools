@@ -53,7 +53,7 @@ pub fn run() {
             issue_service_control_confirmation_safe,
             control_windows_service_safe,
             get_app_settings,
-            save_app_settings,
+            save_app_settings_safe,
             list_audit_events,
             list_recent_errors,
             list_default_protected_processes,
