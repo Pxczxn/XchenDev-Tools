@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "../components/PageHeader";
 import { healthCheck, listRecentErrors, listRuntimeItems } from "../ipc/client";
 import type { HealthCheckResponse, RecentError, RuntimeItem } from "../ipc/types";
@@ -8,7 +8,8 @@ type LoadState = "loading" | "success" | "error";
 
 function runtimeStateClass(state: string): string {
   const s = state.toUpperCase();
-  if (["RUNNING", "STARTING"].includes(s)) return "env-badge ok";
+  if (s === "RUNNING") return "env-badge ok";
+  if (["STARTING", "STOPPING"].includes(s)) return "env-badge loading";
   if (["FAILED", "BLOCKED"].includes(s)) return "env-badge err";
   if (["CONFIGURED", "DISCOVERED", "STOPPED"].includes(s)) return "env-badge muted";
   return "env-badge muted";
@@ -20,8 +21,11 @@ export function DashboardPage() {
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [runtimeItems, setRuntimeItems] = useState<RuntimeItem[]>([]);
   const [recentErrors, setRecentErrors] = useState<RecentError[]>([]);
+  const refreshInFlightRef = useRef(false);
 
   const refreshDashboard = useCallback(async (showLoading: boolean) => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     if (showLoading) setState("loading");
     setErrorCode(null);
     try {
@@ -41,6 +45,8 @@ export function DashboardPage() {
       setRuntimeItems([]);
       setRecentErrors([]);
       setState("error");
+    } finally {
+      refreshInFlightRef.current = false;
     }
   }, []);
 
