@@ -79,20 +79,7 @@ fn query_service_status(service_name: &str) -> Result<WindowsServiceStatus, Stri
         return Err(format!("SERVICE_QUERY_FAILED:{}", detail.trim()));
     }
 
-    let text = String::from_utf8_lossy(&output.stdout).to_uppercase();
-    if text.contains("STOP_PENDING") {
-        Ok(WindowsServiceStatus::Stopping)
-    } else if text.contains("START_PENDING") {
-        Ok(WindowsServiceStatus::Starting)
-    } else if text.contains("RUNNING") {
-        Ok(WindowsServiceStatus::Running)
-    } else if text.contains("STOPPED") {
-        Ok(WindowsServiceStatus::Stopped)
-    } else if text.contains("PAUSED") {
-        Ok(WindowsServiceStatus::Paused)
-    } else {
-        Ok(WindowsServiceStatus::Unknown)
-    }
+    Ok(parse_sc_status(&String::from_utf8_lossy(&output.stdout)))
 }
 
 fn wait_for_status(service_name: &str, target: WindowsServiceStatus) -> Result<(), String> {
@@ -245,6 +232,31 @@ pub fn control_windows_service_safe(
     }
 }
 
+fn parse_sc_status(text: &str) -> WindowsServiceStatus {
+    let upper = text.to_uppercase();
+    let Some(state_line) = upper
+        .lines()
+        .map(str::trim_start)
+        .find(|line| line.starts_with("STATE"))
+    else {
+        return WindowsServiceStatus::Unknown;
+    };
+
+    if state_line.contains("STOP_PENDING") {
+        WindowsServiceStatus::Stopping
+    } else if state_line.contains("START_PENDING") {
+        WindowsServiceStatus::Starting
+    } else if state_line.contains("RUNNING") {
+        WindowsServiceStatus::Running
+    } else if state_line.contains("STOPPED") {
+        WindowsServiceStatus::Stopped
+    } else if state_line.contains("PAUSED") {
+        WindowsServiceStatus::Paused
+    } else {
+        WindowsServiceStatus::Unknown
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,21 +304,18 @@ mod tests {
             WindowsServiceStatus::Running
         );
     }
-}
 
-fn parse_sc_status(text: &str) -> WindowsServiceStatus {
-    let upper = text.to_uppercase();
-    if upper.contains("STOP_PENDING") {
-        WindowsServiceStatus::Stopping
-    } else if upper.contains("START_PENDING") {
-        WindowsServiceStatus::Starting
-    } else if upper.contains("RUNNING") {
-        WindowsServiceStatus::Running
-    } else if upper.contains("STOPPED") {
-        WindowsServiceStatus::Stopped
-    } else if upper.contains("PAUSED") {
-        WindowsServiceStatus::Paused
-    } else {
-        WindowsServiceStatus::Unknown
+    #[test]
+    fn parser_ignores_running_text_outside_state_line() {
+        let text = "SERVICE_NAME: RUNNING_CACHE\nDISPLAY_NAME: Running Cache Helper\nSTATE              : 1  STOPPED";
+        assert_eq!(parse_sc_status(text), WindowsServiceStatus::Stopped);
+    }
+
+    #[test]
+    fn parser_returns_unknown_without_state_line() {
+        assert_eq!(
+            parse_sc_status("SERVICE_NAME: demo\nDISPLAY_NAME: RUNNING helper"),
+            WindowsServiceStatus::Unknown
+        );
     }
 }
