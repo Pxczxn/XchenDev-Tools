@@ -2,7 +2,9 @@ use crate::app_state::AppState;
 use crate::config_store::AppConfig;
 use crate::config_transaction::with_config_rollback;
 use crate::domain::{LaunchSessionState, OperationResult};
+use crate::history_retention::prune_config_history;
 use crate::settings_guard::normalize_settings;
+use chrono::Utc;
 use tauri::State;
 
 use super::launch_profiles::launch_lifecycle_lock;
@@ -35,6 +37,7 @@ fn normalize_import_content(content: &str) -> Result<String, String> {
     let mut parsed: AppConfig =
         serde_json::from_str(content).map_err(|e| format!("PROFILE_INVALID:{}", e))?;
     parsed.settings = normalize_settings(parsed.settings)?;
+    prune_config_history(&mut parsed, Utc::now());
     serde_json::to_string_pretty(&parsed).map_err(|e| format!("PROFILE_INVALID:{}", e))
 }
 
