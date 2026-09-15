@@ -2,10 +2,11 @@
 //!
 //! Spawn: CreateJobObject → CreateProcessW(CREATE_SUSPENDED) → AssignProcessToJobObject → ResumeThread.
 //! Stop: TerminateJobObject. Flag: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE only.
+//! Handle inheritance: STARTUPINFOEX + PROC_THREAD_ATTRIBUTE_HANDLE_LIST only exposes session stdio pipes.
 
 use std::ffi::c_void;
 use std::fs::File;
-use std::mem::size_of;
+use std::mem::{size_of, size_of_val};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::path::Path;
@@ -25,9 +26,12 @@ use windows::Win32::System::JobObjects::{
 };
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
-    CreateProcessW, GetExitCodeProcess, GetProcessId, OpenProcess, ResumeThread,
-    TerminateProcess, WaitForSingleObject, PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION,
-    STARTF_USESTDHANDLES, STARTUPINFOW, CREATE_NO_WINDOW, CREATE_SUSPENDED, INFINITE,
+    CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, GetProcessId,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess, ResumeThread,
+    TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject, PROCESS_INFORMATION,
+    PROCESS_QUERY_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, STARTUPINFOW, CREATE_NO_WINDOW, CREATE_SUSPENDED,
+    EXTENDED_STARTUPINFO_PRESENT, INFINITE,
 };
 
 #[cfg(test)]
@@ -65,6 +69,60 @@ impl Drop for WinHandle {
             unsafe {
                 let _ = CloseHandle(self.0);
             }
+        }
+    }
+}
+
+/// Owns the backing memory required by a Win32 process-thread attribute list.
+/// The list only lives through CreateProcessW and is deleted before returning.
+struct ProcThreadAttributeList {
+    _storage: Vec<u8>,
+    list: LPPROC_THREAD_ATTRIBUTE_LIST,
+}
+
+impl ProcThreadAttributeList {
+    fn for_handle_list(handles: &[HANDLE]) -> Result<Self, String> {
+        debug_assert!(!handles.is_empty());
+
+        let mut bytes = 0usize;
+        // The sizing call is documented to fail while returning the required byte count.
+        let _ = unsafe { InitializeProcThreadAttributeList(None, 1, None, &mut bytes) };
+        if bytes == 0 {
+            return Err("InitializeProcThreadAttributeList(size): 未返回缓冲区大小".to_string());
+        }
+
+        let mut storage = vec![0u8; bytes];
+        let list = LPPROC_THREAD_ATTRIBUTE_LIST(storage.as_mut_ptr() as *mut c_void);
+        unsafe {
+            InitializeProcThreadAttributeList(Some(list), 1, None, &mut bytes)
+                .map_err(|e| format!("InitializeProcThreadAttributeList: {}", e))?;
+        }
+
+        let attributes = Self {
+            _storage: storage,
+            list,
+        };
+        unsafe {
+            UpdateProcThreadAttribute(
+                attributes.list,
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                Some(handles.as_ptr() as *const c_void),
+                size_of_val(handles),
+                None,
+                None,
+            )
+        }
+        .map_err(|e| format!("UpdateProcThreadAttribute(HANDLE_LIST): {}", e))?;
+
+        Ok(attributes)
+    }
+}
+
+impl Drop for ProcThreadAttributeList {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteProcThreadAttributeList(self.list);
         }
     }
 }
@@ -205,36 +263,67 @@ pub fn spawn_cmd_session(
     };
 
     let cmdline = format!("cmd /C {command}");
-    let cmdline_wide = os_wide(&cmdline);
+    let mut cmdline_wide = os_wide(&cmdline);
     let cwd_wide = os_wide_path(Path::new(working_directory));
-
-    let mut si = STARTUPINFOW::default();
-    si.cb = size_of::<STARTUPINFOW>() as u32;
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = stdout_pipe
-        .as_ref()
-        .map(|p| p.write_handle())
-        .unwrap_or_default();
-    si.hStdError = stderr_pipe
-        .as_ref()
-        .map(|p| p.write_handle())
-        .unwrap_or_default();
-
     let mut pi = PROCESS_INFORMATION::default();
 
-    let create_result = unsafe {
-        CreateProcessW(
-            None,
-            Some(windows::core::PWSTR(cmdline_wide.as_ptr() as *mut _)),
-            None,
-            None,
-            true,
-            CREATE_SUSPENDED | CREATE_NO_WINDOW,
-            None,
-            windows::core::PCWSTR(cwd_wide.as_ptr()),
-            &si,
-            &mut pi,
-        )
+    let mut inherited_handles = Vec::with_capacity(2);
+    if let Some(pipe) = stdout_pipe.as_ref() {
+        inherited_handles.push(pipe.write_handle());
+    }
+    if let Some(pipe) = stderr_pipe.as_ref() {
+        inherited_handles.push(pipe.write_handle());
+    }
+
+    let create_result = if inherited_handles.is_empty() {
+        let mut si = STARTUPINFOW::default();
+        si.cb = size_of::<STARTUPINFOW>() as u32;
+        unsafe {
+            CreateProcessW(
+                None,
+                Some(windows::core::PWSTR(cmdline_wide.as_mut_ptr())),
+                None,
+                None,
+                false,
+                CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                None,
+                windows::core::PCWSTR(cwd_wide.as_ptr()),
+                &si,
+                &mut pi,
+            )
+        }
+    } else {
+        let attributes = ProcThreadAttributeList::for_handle_list(&inherited_handles)?;
+        let mut si = STARTUPINFOEXW::default();
+        si.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdOutput = stdout_pipe
+            .as_ref()
+            .map(|p| p.write_handle())
+            .unwrap_or_default();
+        si.StartupInfo.hStdError = stderr_pipe
+            .as_ref()
+            .map(|p| p.write_handle())
+            .unwrap_or_default();
+        si.lpAttributeList = attributes.list;
+
+        // `attributes` must stay alive until CreateProcessW returns.
+        let result = unsafe {
+            CreateProcessW(
+                None,
+                Some(windows::core::PWSTR(cmdline_wide.as_mut_ptr())),
+                None,
+                None,
+                true,
+                CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+                None,
+                windows::core::PCWSTR(cwd_wide.as_ptr()),
+                &si.StartupInfo,
+                &mut pi,
+            )
+        };
+        drop(attributes);
+        result
     };
 
     if let Err(e) = create_result {
@@ -302,4 +391,28 @@ fn os_wide(s: &str) -> Vec<u16> {
 
 fn os_wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn piped_spawn_uses_extended_handle_list_and_captures_output() {
+        let mut spawned = spawn_cmd_session(".", "echo xchen-handle-list", true, true)
+            .expect("spawn with explicit inherited handle list");
+        let (exit_code, failed) = spawned.process.wait();
+        assert!(!failed, "process wait should succeed");
+        assert_eq!(exit_code, Some(0));
+
+        let mut stdout = String::new();
+        spawned
+            .stdout
+            .as_mut()
+            .expect("stdout pipe")
+            .read_to_string(&mut stdout)
+            .expect("read stdout");
+        assert!(stdout.contains("xchen-handle-list"), "stdout={stdout:?}");
+    }
 }
