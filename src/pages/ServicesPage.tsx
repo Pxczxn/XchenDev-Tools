@@ -53,25 +53,31 @@ export function ServicesPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [managedKinds, setManagedKinds] = useState<string[]>(["mysql", "redis"]);
 
-  const load = useCallback(async () => {
+  const refreshServices = useCallback(async (clearMessage: boolean): Promise<boolean> => {
     setLoading(true);
-    setMessage(null);
+    if (clearMessage) setMessage(null);
     try {
       const settings = await getAppSettings();
       const kinds = normalizeManagedServiceKinds(settings.managed_service_kinds);
       setManagedKinds(kinds);
       setServices(await listManagedServices());
+      return true;
     } catch (e) {
       setMessage(labelErrorText(String(e)));
       setServices([]);
+      return false;
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void refreshServices(true);
+  }, [refreshServices]);
+
+  async function onRefresh() {
+    await refreshServices(true);
+  }
 
   async function onControl(svc: WindowsServiceInfo, action: string) {
     try {
@@ -87,14 +93,14 @@ export function ServicesPage() {
         action,
         confirmationToken: confirmation.confirmation_token,
       });
-      setMessage(
-        formatOperationMessage(
-          result.status,
-          result.message,
-          result.reason_code,
-        ),
+      const operationMessage = formatOperationMessage(
+        result.status,
+        result.message,
+        result.reason_code,
       );
-      await load();
+      if (await refreshServices(false)) {
+        setMessage(operationMessage);
+      }
     } catch (e) {
       setMessage(labelErrorText(String(e)));
     }
@@ -111,7 +117,7 @@ export function ServicesPage() {
           enabledKinds,
         )} 相关 Windows 服务；仅显示已注册为系统服务的实例`}
         actions={
-          <button type="button" className="secondary btn-sm" onClick={load} disabled={loading}>
+          <button type="button" className="secondary btn-sm" onClick={onRefresh} disabled={loading}>
             {loading ? "刷新中…" : "刷新服务"}
           </button>
         }
