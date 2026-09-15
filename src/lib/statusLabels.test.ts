@@ -10,6 +10,12 @@ describe("statusLabels", () => {
     expect(labelErrorText("PATH_NOT_FOUND:路径不存在")).toBe("路径不存在");
   });
 
+  it("maps disabled runtime errors", () => {
+    expect(labelErrorText("RUNTIME_DISABLED:运行时 node 已在设置中禁用")).toBe(
+      "运行时已禁用：运行时 node 已在设置中禁用",
+    );
+  });
+
   it("maps validation status", () => {
     expect(labelStatus("VALID")).toBe("可用");
   });
