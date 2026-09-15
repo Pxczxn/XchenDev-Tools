@@ -59,12 +59,30 @@ fn scan_tree(
     let entries = fs::read_dir(dir).map_err(|e| format!("PROJECT_SCAN_FAILED:{}", e))?;
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_dir() || should_skip_directory(&path) {
+        if should_skip_directory(&path) {
             continue;
         }
-        scan_tree(&path, root, level + 1, out)?;
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        if !file_type.is_dir() && !file_type.is_symlink() {
+            continue;
+        }
+        let Some(canonical_child) = canonical_child_within_root(&path, root) else {
+            continue;
+        };
+        if !canonical_child.is_dir() {
+            continue;
+        }
+        scan_tree(&canonical_child, root, level + 1, out)?;
     }
     Ok(())
+}
+
+fn canonical_child_within_root(path: &Path, root: &Path) -> Option<PathBuf> {
+    let canonical = fs::canonicalize(path).ok()?;
+    canonical.starts_with(root).then_some(canonical)
 }
 
 fn should_skip_directory(path: &Path) -> bool {
@@ -297,6 +315,14 @@ mod tests {
             preferred_node_scripts(&scripts),
             vec!["dev".to_string(), "start".to_string(), "serve".to_string()]
         );
+    }
+
+    #[test]
+    fn canonical_child_rejects_path_outside_project_root() {
+        let root = tempdir().expect("root");
+        let outside = tempdir().expect("outside");
+        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
+        assert!(canonical_child_within_root(outside.path(), &canonical_root).is_none());
     }
 
     #[test]
