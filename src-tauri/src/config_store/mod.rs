@@ -431,7 +431,9 @@ fn project_root_from_exe(exe: &Path) -> Option<PathBuf> {
 
 fn read_config(path: &Path) -> Option<AppConfig> {
     let data = fs::read_to_string(path).ok()?;
-    serde_json::from_str::<AppConfig>(&data).ok()
+    let config = serde_json::from_str::<AppConfig>(&data).ok()?;
+    validate_import_config(&config).ok()?;
+    Some(config)
 }
 
 fn load_or_default(path: &PathBuf) -> AppConfig {
@@ -486,6 +488,14 @@ mod tests {
         }
     }
 
+    fn write_config(path: &Path, config: &AppConfig) {
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(config).expect("serialize config"),
+        )
+        .expect("write config");
+    }
+
     #[test]
     fn import_integrity_accepts_valid_project_profile_graph() {
         let mut config = AppConfig::default();
@@ -523,16 +533,85 @@ mod tests {
             "C:\\Tools\\node.exe".to_string(),
         );
         fs::write(&path, "{broken-json").expect("corrupt primary");
-        fs::write(
-            backup_path(&path),
-            serde_json::to_vec_pretty(&backup).expect("serialize backup"),
-        )
-        .expect("backup");
+        write_config(&backup_path(&path), &backup);
 
         let store = open_at(path);
         assert_eq!(
             store.get_manual_override("node").as_deref(),
             Some("C:\\Tools\\node.exe")
+        );
+    }
+
+    #[test]
+    fn load_falls_back_to_backup_when_primary_is_semantically_invalid() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+
+        let mut invalid_primary = AppConfig::default();
+        invalid_primary
+            .launch_profiles
+            .push(sample_profile("orphan-profile", "missing-project"));
+        write_config(&path, &invalid_primary);
+
+        let mut backup = AppConfig::default();
+        backup.manual_overrides.insert(
+            "java".to_string(),
+            "C:\\Tools\\java.exe".to_string(),
+        );
+        write_config(&backup_path(&path), &backup);
+
+        let store = open_at(path);
+        assert_eq!(
+            store.get_manual_override("java").as_deref(),
+            Some("C:\\Tools\\java.exe")
+        );
+    }
+
+    #[test]
+    fn load_uses_default_when_primary_and_backup_are_semantically_invalid() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+
+        let mut invalid_primary = AppConfig::default();
+        invalid_primary.version = CURRENT_CONFIG_VERSION + 1;
+        write_config(&path, &invalid_primary);
+
+        let mut invalid_backup = AppConfig::default();
+        invalid_backup
+            .launch_profiles
+            .push(sample_profile("orphan-profile", "missing-project"));
+        write_config(&backup_path(&path), &invalid_backup);
+
+        let store = open_at(path);
+        assert!(store.list_projects().is_empty());
+        assert!(store.all_launch_profiles().is_empty());
+        assert!(store.all_manual_overrides().is_empty());
+        assert_eq!(store.get_settings().theme, AppSettings::default().theme);
+    }
+
+    #[test]
+    fn load_prefers_valid_primary_over_backup() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+
+        let mut primary = AppConfig::default();
+        primary.manual_overrides.insert(
+            "node".to_string(),
+            "C:\\Primary\\node.exe".to_string(),
+        );
+        write_config(&path, &primary);
+
+        let mut backup = AppConfig::default();
+        backup.manual_overrides.insert(
+            "node".to_string(),
+            "C:\\Backup\\node.exe".to_string(),
+        );
+        write_config(&backup_path(&path), &backup);
+
+        let store = open_at(path);
+        assert_eq!(
+            store.get_manual_override("node").as_deref(),
+            Some("C:\\Primary\\node.exe")
         );
     }
 }
