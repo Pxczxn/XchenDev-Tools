@@ -84,8 +84,9 @@ export function ProjectsPage() {
           <CardContent className="space-y-2">
             {manager.projects.length === 0 ? (
               <button
+                data-slot="button"
                 type="button"
-                className="w-full rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-muted/30"
+                className="w-full rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                 onClick={() => void manager.pickDirectory()}
               >
                 <FolderOpen className="mx-auto mb-3 size-5" />
@@ -105,8 +106,9 @@ export function ProjectsPage() {
                   >
                     <div className="flex items-start justify-between gap-2">
                       <button
+                        data-slot="button"
                         type="button"
-                        className="min-w-0 flex-1 text-left"
+                        className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                         onClick={() => void manager.openProject(project)}
                       >
                         <div className="flex items-center gap-2">
@@ -181,7 +183,7 @@ export function ProjectsPage() {
                 <div className="relative min-w-0">
                   <FolderOpen className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
-                    value={manager.rootPath}
+                    value={formatDisplayPath(manager.rootPath)}
                     onChange={(event) => manager.editRootPath(event.target.value)}
                     className="pl-9 font-mono text-xs"
                     placeholder="选择或输入项目根目录"
@@ -322,12 +324,13 @@ export function ProjectsPage() {
                             const selected = manager.selectedCandidate?.id === candidate.id;
                             return (
                               <button
+                                data-slot="button"
                                 key={candidate.id}
                                 type="button"
                                 className={
                                   selected
-                                    ? "w-full rounded-lg border border-primary/50 bg-primary/[0.05] p-3 text-left ring-1 ring-primary/10"
-                                    : "w-full rounded-lg border border-border bg-background/40 p-3 text-left transition-colors hover:border-primary/30 hover:bg-muted/20"
+                                    ? "w-full rounded-lg border border-primary/50 bg-primary/[0.05] p-3 text-left ring-1 ring-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                                    : "w-full rounded-lg border border-border bg-background/40 p-3 text-left transition-colors hover:border-primary/30 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                                 }
                                 onClick={() => manager.selectCandidate(candidate)}
                               >
@@ -352,7 +355,7 @@ export function ProjectsPage() {
                                 </div>
                                 <div className="mt-2 flex flex-col gap-1 text-xs text-muted-foreground">
                                   <span className="truncate" title={candidate.evidence_file}>
-                                    {candidate.evidence_file}
+                                    {formatDisplayPath(candidate.evidence_file)}
                                   </span>
                                   {candidate.suggested_command && (
                                     <code className="truncate rounded bg-muted/50 px-2 py-1.5 text-foreground">
@@ -424,9 +427,10 @@ export function ProjectsPage() {
                                 <div className="flex flex-wrap gap-1.5 pt-1">
                                   {manager.selectedCandidate.scripts.slice(0, 6).map((script) => (
                                     <button
+                                      data-slot="button"
                                       key={script}
                                       type="button"
-                                      className="rounded-md border border-border bg-muted/30 px-2 py-1 font-mono text-[11px] text-muted-foreground hover:border-primary/30 hover:text-foreground"
+                                      className="rounded-md border border-border bg-muted/30 px-2 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                                       onClick={() => manager.setCommand(`npm run ${script}`)}
                                     >
                                       npm run {script}
