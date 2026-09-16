@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "npm run icons",
     "dev": "vite",
     "icons": "tauri icon ./public/app-icon.svg",
     "prebuild": "npm run icons",
