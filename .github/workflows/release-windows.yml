@@ -85,6 +85,9 @@ jobs:
       - name: Frontend tests
         run: npm test
 
+      - name: Generate app icons
+        run: npm run icons
+
       - name: Rust format check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
