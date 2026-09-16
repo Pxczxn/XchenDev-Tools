@@ -1,0 +1,213 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Validate release tag and versions
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Release tag must look like v0.1.0 or v0.1.0-beta.1, got: $tag"
+          }
+
+          $expectedVersion = $tag.Substring(1)
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargoVersion = Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $cargoVersion) {
+            throw "Unable to read package version from src-tauri/Cargo.toml"
+          }
+          $cargoVersion = $cargoVersion.Matches[0].Groups[1].Value
+
+          $versions = @{
+            "tag" = $expectedVersion
+            "package.json" = $packageVersion
+            "src-tauri/Cargo.toml" = $cargoVersion
+            "src-tauri/tauri.conf.json" = $tauriVersion
+          }
+          $distinct = @($versions.Values | Sort-Object -Unique)
+          if ($distinct.Count -ne 1) {
+            $details = ($versions.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ', '
+            throw "Release version mismatch: $details"
+          }
+
+          git fetch origin master
+          git merge-base --is-ancestor HEAD origin/master
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag $tag does not point to a commit reachable from master"
+          }
+
+          Write-Host "Release version OK: $expectedVersion"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend dependency audit
+        run: npm audit --audit-level=moderate
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Rust format check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust clippy
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+
+      - name: Build NSIS installer
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Verify install and uninstall preserve user data
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installers.Count)"
+          }
+          $installer = $installers[0]
+
+          $installDir = Join-Path $env:LOCALAPPDATA "XchenDev-Tools"
+          $dataRoot = Join-Path $env:LOCALAPPDATA "XchenDev\XchenDev-Tools"
+          $sentinel = Join-Path $dataRoot "config\release-workflow-sentinel.txt"
+
+          Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force $dataRoot -ErrorAction SilentlyContinue
+
+          $installProcess = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -PassThru
+          if (-not $installProcess.WaitForExit(120000)) {
+            $installProcess.Kill()
+            throw "Silent installer timed out"
+          }
+          if ($installProcess.ExitCode -ne 0) {
+            throw "Silent installer failed with exit code $($installProcess.ExitCode)"
+          }
+
+          $appExe = Join-Path $installDir "xchendev-tools.exe"
+          $uninstaller = Join-Path $installDir "uninstall.exe"
+          if (-not (Test-Path $appExe)) { throw "Installed executable not found: $appExe" }
+          if (-not (Test-Path $uninstaller)) { throw "Uninstaller not found: $uninstaller" }
+
+          if ($dataRoot.Equals($installDir, [System.StringComparison]::OrdinalIgnoreCase) -or
+              $dataRoot.StartsWith($installDir + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "User data directory is inside the install directory"
+          }
+
+          New-Item -ItemType Directory -Force (Split-Path $sentinel) | Out-Null
+          "keep-me" | Set-Content -Encoding ascii $sentinel
+
+          $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList "/S", "_?=$installDir" -PassThru
+          if (-not $uninstallProcess.WaitForExit(120000)) {
+            $uninstallProcess.Kill()
+            throw "Silent uninstaller timed out"
+          }
+          if ($uninstallProcess.ExitCode -ne 0) {
+            throw "Silent uninstaller failed with exit code $($uninstallProcess.ExitCode)"
+          }
+          Start-Sleep -Seconds 2
+
+          if (Test-Path $appExe) { throw "Application executable survived uninstall" }
+          if (-not (Test-Path $sentinel)) { throw "User data was deleted by uninstall" }
+
+          Write-Host "Install directory removed: $installDir"
+          Write-Host "User data preserved: $sentinel"
+
+      - name: Prepare release artifacts
+        shell: pwsh
+        run: |
+          $sourceInstallers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" -File)
+          if ($sourceInstallers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($sourceInstallers.Count)"
+          }
+
+          $releaseDir = New-Item -ItemType Directory -Force "release-artifacts"
+          $targetName = "XchenDev-Tools-$($env:GITHUB_REF_NAME)-Windows-x64-setup.exe"
+          $target = Join-Path $releaseDir.FullName $targetName
+          Copy-Item $sourceInstallers[0].FullName $target
+
+          $hash = (Get-FileHash $target -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $targetName" | Set-Content -Encoding ascii (Join-Path $releaseDir.FullName "installer-sha256.txt")
+
+          Write-Host "Release installer: $targetName"
+          Write-Host "SHA256: $hash"
+
+      - name: Upload release build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: XchenDev-Tools-${{ github.ref_name }}-Windows
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Create or update GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $installer = Get-ChildItem "release-artifacts" -Filter "*-setup.exe" -File | Select-Object -First 1
+          $checksum = Get-Item "release-artifacts/installer-sha256.txt"
+          if (-not $installer) { throw "Release installer not found" }
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $installer.FullName $checksum.FullName --clobber --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw "Failed to update release assets for $tag" }
+            Write-Host "Updated release assets for $tag"
+            exit 0
+          }
+
+          $arguments = @(
+            "release", "create", $tag,
+            $installer.FullName, $checksum.FullName,
+            "--repo", $env:GITHUB_REPOSITORY,
+            "--verify-tag",
+            "--generate-notes",
+            "--title", "XchenDev-Tools $tag"
+          )
+          if ($tag.Contains('-')) {
+            $arguments += "--prerelease"
+          }
+
+          & gh @arguments
+          if ($LASTEXITCODE -ne 0) { throw "Failed to create GitHub Release for $tag" }
