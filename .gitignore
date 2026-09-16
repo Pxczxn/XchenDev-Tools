@@ -16,6 +16,8 @@ dist-ssr/
 
 # Rust / Tauri（src-tauri/.gitignore 另管 /target/、/gen/schemas）
 src-tauri/target/
+# 由 public/app-icon.svg 通过 `npm run icons` 生成
+src-tauri/icons/
 
 # 缓存与测试输出
 coverage/
