@@ -29,7 +29,12 @@ export default defineConfig(() => ({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: [
+        "**/src-tauri/**",
+        "**/config/config.json",
+        "**/config/config.json.tmp",
+        "**/config/config.json.bak",
+      ],
     },
   },
 }));
