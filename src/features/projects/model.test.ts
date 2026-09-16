@@ -135,6 +135,6 @@ describe("project manager model", () => {
 
     expect(next).toHaveLength(MAX_LOG_LINES_PER_SESSION);
     expect(next[0]).toBe("line-1");
-    expect(next.at(-1)).toBe("latest");
+    expect(next[next.length - 1]).toBe("latest");
   });
 });
