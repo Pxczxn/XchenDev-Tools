@@ -5,9 +5,11 @@ import type {
   TechnologyCandidate,
 } from "../../ipc/types";
 import {
+  MAX_LOG_LINES_PER_SESSION,
   appendSessionLog,
   buildProjectWorkspaceStats,
   displaySessionForProfile,
+  suggestedRole,
   terminalState,
 } from "./model";
 
@@ -36,12 +38,16 @@ function session(
   };
 }
 
-function candidate(id: string, status = "READY"): TechnologyCandidate {
+function candidate(
+  id: string,
+  status = "READY",
+  stack = "NODE",
+): TechnologyCandidate {
   return {
     id,
     directory: ".",
     evidence_file: "package.json",
-    stack: "NODE",
+    stack,
     status,
   };
 }
@@ -57,6 +63,18 @@ describe("project manager model", () => {
       displaySessionForProfile(sessions, { frontend: "old" }, "frontend")
         ?.launch_session_id,
     ).toBe("live");
+  });
+
+  it("falls back to the remembered terminal session when nothing is active", () => {
+    const sessions = {
+      stopped: session("stopped", "backend", "STOPPED", 0),
+    };
+
+    expect(
+      displaySessionForProfile(sessions, { backend: "stopped" }, "backend")
+        ?.launch_session_id,
+    ).toBe("stopped");
+    expect(displaySessionForProfile(sessions, {}, "missing")).toBeUndefined();
   });
 
   it("builds workspace stats from current project context", () => {
@@ -86,12 +104,37 @@ describe("project manager model", () => {
   it("maps terminal events without losing stop intent", () => {
     expect(terminalState({ exitCode: 1 }, "STOPPING")).toBe("STOPPED");
     expect(terminalState({ exitCode: 1 }, "RUNNING")).toBe("FAILED");
-    expect(terminalState({ finalState: "FAILED", exitCode: 1 })).toBe(
+    expect(terminalState({ exitCode: 0 }, "RUNNING")).toBe("STOPPED");
+    expect(terminalState({ finalState: "FAILED", exitCode: 0 })).toBe(
       "FAILED",
     );
   });
 
+  it("maps Node scan results to frontend and other stacks to backend", () => {
+    expect(suggestedRole(candidate("node", "READY", "NODE"))).toBe("frontend");
+    expect(suggestedRole(candidate("node-lower", "READY", "node"))).toBe(
+      "frontend",
+    );
+    expect(suggestedRole(candidate("maven", "READY", "MAVEN"))).toBe(
+      "backend",
+    );
+    expect(suggestedRole(candidate("rust", "READY", "RUST"))).toBe("backend");
+  });
+
   it("keeps appended output ordered", () => {
     expect(appendSessionLog(["a", "b"], "c")).toEqual(["a", "b", "c"]);
+  });
+
+  it("keeps only the newest bounded launch output", () => {
+    const existing = Array.from(
+      { length: MAX_LOG_LINES_PER_SESSION },
+      (_, index) => `line-${index}`,
+    );
+
+    const next = appendSessionLog(existing, "latest");
+
+    expect(next).toHaveLength(MAX_LOG_LINES_PER_SESSION);
+    expect(next[0]).toBe("line-1");
+    expect(next.at(-1)).toBe("latest");
   });
 });
