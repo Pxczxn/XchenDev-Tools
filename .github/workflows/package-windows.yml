@@ -39,6 +39,31 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Version consistency check
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import tomllib
+          from pathlib import Path
+
+          package_version = json.loads(Path("package.json").read_text(encoding="utf-8"))["version"]
+          tauri_version = json.loads(Path("src-tauri/tauri.conf.json").read_text(encoding="utf-8"))["version"]
+          cargo = tomllib.loads(Path("src-tauri/Cargo.toml").read_text(encoding="utf-8"))
+          cargo_version = cargo["package"]["version"]
+
+          versions = {
+              "package.json": package_version,
+              "src-tauri/Cargo.toml": cargo_version,
+              "src-tauri/tauri.conf.json": tauri_version,
+          }
+          if len(set(versions.values())) != 1:
+              details = ", ".join(f"{path}={version}" for path, version in versions.items())
+              raise SystemExit(f"version mismatch: {details}")
+
+          print(f"version OK: {package_version}")
+          PY
+
       - name: Install frontend dependencies
         run: npm ci
 
