@@ -11,7 +11,7 @@ export const MAX_LOG_LINES_PER_SESSION = 2000;
 export type SessionsById = Record<string, LaunchSessionInfo>;
 export type LogsBySessionId = Record<string, string[]>;
 export type LastSessionByProfile = Record<string, string>;
-export type WorkspaceView = "scanner" | "runtime";
+export type WorkspaceView = "overview" | "scanner" | "runtime";
 export type NoticeTone = "info" | "success" | "error";
 
 export interface Notice {
