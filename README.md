@@ -2,7 +2,7 @@
 
 XchenDev-Tools 是一个面向 Windows 本地开发环境的桌面控制台，用来集中处理开发过程中常见的端口冲突、进程占用、基础服务、运行时环境与项目启动管理。
 
-当前版本：`0.1.0`（开发中）
+当前版本：`0.1.0`（发布候选）
 
 ## 主要能力
 
@@ -102,7 +102,7 @@ cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D w
 
 ## Windows 安装包
 
-项目当前使用 **NSIS** 打包 Windows x64 安装程序，采用当前用户安装模式，不要求管理员权限，并提供简体中文 / English 安装界面。
+项目使用 **NSIS** 打包 Windows x64 安装程序，采用当前用户安装模式，不要求管理员权限，并提供简体中文 / English 安装界面。
 
 本地构建：
 
@@ -116,7 +116,11 @@ npm run tauri build -- --bundles nsis
 src-tauri\target\release\bundle\nsis\
 ```
 
-仓库中的 `Package Windows` GitHub Actions 工作流会在正式打包前执行测试，并对生成的安装程序进行静默安装 / 卸载回归，确认卸载不会删除用户配置，同时输出 SHA256 校验值。
+应用图标以 `public/app-icon.svg` 为唯一源文件，开发和构建流程会自动生成 Tauri 所需的 Windows 图标集。
+
+仓库中的 `Package Windows` GitHub Actions 工作流会在正式打包前执行版本一致性校验、依赖审计、前后端测试与静态检查，并对生成的安装程序进行静默安装 / 卸载回归，确认卸载不会删除用户配置，同时输出 SHA256 校验值。
+
+推送符合 `v*` 规则的版本标签（例如 `v0.1.0`）后，`Release Windows` 工作流会再次执行完整发布检查，构建 NSIS 安装程序并创建或更新对应的 GitHub Release。
 
 ## CI
 
@@ -133,7 +137,7 @@ src-tauri\target\release\bundle\nsis\
 
 ## 状态
 
-项目仍处于 `v0.1.0` 发布前开发阶段。当前重点是稳定性、Windows 实机回归、正式应用图标与发布元数据，不优先扩展新功能。
+项目处于 `v0.1.0` 发布前封板阶段。核心功能、Windows 安装包构建、图标生成、版本一致性检查和安装 / 卸载持久化回归均已接入自动化流程；发布前不优先扩展新功能。
 
 ---
 
