@@ -76,6 +76,15 @@ jobs:
       - name: Generate app icons
         run: npm run icons
 
+      - name: Verify generated app icon
+        shell: pwsh
+        run: |
+          $icon = Get-Item "src-tauri/icons/icon.ico" -ErrorAction Stop
+          if ($icon.Length -lt 1024) {
+            throw "Generated icon.ico is unexpectedly small: $($icon.Length) bytes"
+          }
+          Write-Host "Generated icon.ico: $($icon.Length) bytes"
+
       - name: Rust format check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
