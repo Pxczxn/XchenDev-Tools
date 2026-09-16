@@ -1,0 +1,137 @@
+name: Package Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/package-windows.yml"
+
+concurrency:
+  group: package-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend dependency audit
+        run: npm audit --audit-level=moderate
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Rust format check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust clippy
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+
+      - name: Build NSIS installer
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Verify install and uninstall preserve user data
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installers.Count)"
+          }
+          $installer = $installers[0]
+
+          $installDir = Join-Path $env:LOCALAPPDATA "XchenDev-Tools"
+          $dataRoot = Join-Path $env:LOCALAPPDATA "XchenDev\XchenDev-Tools"
+          $sentinel = Join-Path $dataRoot "config\package-workflow-sentinel.txt"
+
+          Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force $dataRoot -ErrorAction SilentlyContinue
+
+          $installProcess = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -PassThru
+          if (-not $installProcess.WaitForExit(120000)) {
+            $installProcess.Kill()
+            throw "Silent installer timed out"
+          }
+          if ($installProcess.ExitCode -ne 0) {
+            throw "Silent installer failed with exit code $($installProcess.ExitCode)"
+          }
+
+          $appExe = Join-Path $installDir "xchendev-tools.exe"
+          $uninstaller = Join-Path $installDir "uninstall.exe"
+          if (-not (Test-Path $appExe)) { throw "Installed executable not found: $appExe" }
+          if (-not (Test-Path $uninstaller)) { throw "Uninstaller not found: $uninstaller" }
+
+          if ($dataRoot.Equals($installDir, [System.StringComparison]::OrdinalIgnoreCase) -or
+              $dataRoot.StartsWith($installDir + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "User data directory is inside the install directory"
+          }
+
+          New-Item -ItemType Directory -Force (Split-Path $sentinel) | Out-Null
+          "keep-me" | Set-Content -Encoding ascii $sentinel
+
+          $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList "/S", "_?=$installDir" -PassThru
+          if (-not $uninstallProcess.WaitForExit(120000)) {
+            $uninstallProcess.Kill()
+            throw "Silent uninstaller timed out"
+          }
+          if ($uninstallProcess.ExitCode -ne 0) {
+            throw "Silent uninstaller failed with exit code $($uninstallProcess.ExitCode)"
+          }
+          Start-Sleep -Seconds 2
+
+          if (Test-Path $appExe) { throw "Application executable survived uninstall" }
+          if (-not (Test-Path $sentinel)) { throw "User data was deleted by uninstall" }
+
+          Write-Host "Install directory removed: $installDir"
+          Write-Host "User data preserved: $sentinel"
+
+      - name: Prepare installer checksum
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" -File | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer not found" }
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content -Encoding ascii installer-sha256.txt
+          Write-Host "Installer: $($installer.Name)"
+          Write-Host "Size: $($installer.Length) bytes"
+          Write-Host "SHA256: $hash"
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: XchenDev-Tools-Windows-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            installer-sha256.txt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
